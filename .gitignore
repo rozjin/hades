@@ -8,5 +8,6 @@
 !/user/patches
 !/user/cross_file.txt
 !/user/native_file.txt
+!/user/versions.txt
 
 persist.img
