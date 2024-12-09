@@ -1,32 +1,22 @@
-
+#include "arch/vmm.hpp"
+#include "arch/x86/types.hpp"
 #include "fs/vfs.hpp"
 #include "mm/common.hpp"
 #include "mm/mm.hpp"
 #include "mm/pmm.hpp"
 #include "mm/vmm.hpp"
-#include "sys/irq.hpp"
-#include "sys/sched/regs.hpp"
 #include "sys/sched/wait.hpp"
-#include "sys/smp.hpp"
-#include "util/io.hpp"
-#include "util/log/log.hpp"
-#include "util/string.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <sys/sched/signal.hpp>
 #include <sys/sched/sched.hpp>
 
-extern "C" {
-    extern void sigreturn_exit(irq::regs *r);
-}
-
-int sched::signal::do_sigaction(process *proc, int sig, sched::signal::sigaction *act, sigaction *old) {
+int sched::signal::do_sigaction(process *proc, thread *task, int sig, sched::signal::sigaction *act, sigaction *old) {
     if (!is_valid(sig) || (sig == SIGKILL || sig == SIGSTOP)) {
-        // TODO: errno
+        arch::set_errno(EINVAL);
         return -1;
     }
 
-    auto sig_queue = &proc->sig_queue;
     proc->sig_lock.irq_acquire();
 
     auto cur_action = &proc->sigactions[sig - 1];
@@ -38,13 +28,18 @@ int sched::signal::do_sigaction(process *proc, int sig, sched::signal::sigaction
         *cur_action = *act;
         cur_action->sa_mask &= ~(SIGMASK(SIGKILL) | SIGMASK(SIGSTOP));
 
-        sig_queue->sig_lock.irq_acquire();
+        auto proc_ctx = &proc->sig_ctx;
+        auto ctx = &task->sig_ctx;
+        proc_ctx->lock.irq_acquire();
+        ctx->lock.irq_acquire();
 
-        if (act->handler.sa_sigaction == SIG_IGN && sig_queue->sigpending & (1ull << sig)) {
-            sig_queue->sigpending &= ~(1 << sig);
+        if (act->handler.sa_sigaction == SIG_IGN && ctx->sigpending & (1ull << sig)) {
+            proc_ctx->sigpending &= ~(1 << sig);
+            ctx->sigpending &= ~(1 << sig);
         }
 
-        sig_queue->sig_lock.irq_release();
+        proc_ctx->lock.irq_release();
+        ctx->lock.irq_release();
     }
 
     proc->sig_lock.irq_release();
@@ -52,56 +47,58 @@ int sched::signal::do_sigaction(process *proc, int sig, sched::signal::sigaction
     return 0;
 }
 
-void sched::signal::do_sigpending(process *proc, sigset_t *set) {
-    auto sig_queue = &proc->sig_queue;
-    sig_queue->sig_lock.irq_acquire();
-    *set = sig_queue->sigpending;
-    sig_queue->sig_lock.irq_release();
+void sched::signal::do_sigpending(thread *task, sigset_t *set) {
+    auto ctx = &task->sig_ctx;
+    ctx->lock.irq_acquire();
+    *set = ctx->sigpending;
+    ctx->lock.irq_release();
 }
 
-int sched::signal::do_sigprocmask(process *proc, int how, sigset_t *set, sigset_t *oldset) {
-    auto sig_queue = &proc->sig_queue;
-    sig_queue->sig_lock.irq_acquire();
+int sched::signal::do_sigprocmask(thread *task, int how, sigset_t *set, sigset_t *oldset) {
+    auto ctx = &task->sig_ctx;
+    ctx->lock.irq_acquire();
 
     if (oldset) {
-        *oldset = sig_queue->sigmask;
+        *oldset = ctx->sigmask;
     }
 
     if (set) {
         switch (how) {
             case SIG_BLOCK:
-                sig_queue->sigmask |= *set;
+                ctx->sigmask |= *set;
                 break;
             case SIG_UNBLOCK:
-                sig_queue->sigmask &= ~(*set);
+                ctx->sigmask &= ~(*set);
                 break;
             case SIG_SETMASK:
-                sig_queue->sigmask = *set;
+                ctx->sigmask = *set;
                 break;
             default:
-                // TODO: errno
-                sig_queue->sig_lock.irq_release();
+                arch::set_errno(EINVAL);
+                ctx->lock.irq_release();
                 return -1;
         }
     }
 
-    sig_queue->sigmask &= ~(SIGMASK(SIGKILL) | SIGMASK(SIGSTOP));
-    sig_queue->sig_lock.irq_release();
+    ctx->sigmask &= ~(SIGMASK(SIGKILL) | SIGMASK(SIGSTOP));
+    ctx->lock.irq_release();
 
     return 0;
 }
 
 int sched::signal::do_kill(pid_t pid, int sig) {
     if (!is_valid(sig)) {
-        return -vfs::error::INVAL;
+        arch::set_errno(EINVAL);
+        return -1;
     }
 
-    auto sender = smp::get_process();
+    auto sender = arch::get_process();
     if (pid > 0) {
         process *target = processes[pid];
         if (!target) {
             // TODO: esrch
-            return -vfs::error::INVAL;
+            arch::set_errno(EINVAL);
+            return -1;
         }
 
         send_process(sender, target, sig);
@@ -111,8 +108,8 @@ int sched::signal::do_kill(pid_t pid, int sig) {
         auto session = sender->sess;
         auto group = session->groups[pid];
         if (group == nullptr) {
-            // TODO: esrch
-            return -vfs::error::INVAL;
+            arch::set_errno(ESRCH);
+            return -1;
         }
 
         for (size_t i = 0; i < group->procs.size(); i++) {
@@ -128,39 +125,39 @@ int sched::signal::do_kill(pid_t pid, int sig) {
     return 0;
 }
 
-int sched::signal::wait_signal(thread *task, queue *sig_queue, sigset_t sigmask, sched::timespec *time) {
+int sched::signal::wait_signal(thread *task, sigset_t sigmask, sched::timespec *time) {
+    auto ctx = &task->sig_ctx;
     if (time) {
-        sig_queue->waitq->set_timer(time);
+        ctx->waitq->set_timer(time);
     }
 
-    sig_queue->sig_lock.irq_acquire();
+    ctx->lock.irq_acquire();
     for (size_t i = 1; i <= SIGNAL_MAX; i++) {
         if (sigmask & SIGMASK(i)) {
-            auto signal = &sig_queue->queue[i - 1];
-            sig_queue->sigdelivered &= ~SIGMASK(i);
+            auto signal = &ctx->queue[i - 1];
+            ctx->sigdelivered &= ~SIGMASK(i);
 
             if (signal->notify_queue == nullptr) {
                 signal->notify_queue = frg::construct<ipc::trigger>(memory::mm::heap);
-                signal->notify_queue->add(sig_queue->waitq);
+                signal->notify_queue->add(ctx->waitq);
             }
         }
     }
+    ctx->lock.irq_release();
 
-    sig_queue->sig_lock.irq_release();
     for (;;) {
         for (size_t i = 1; i <= SIGNAL_MAX; i++) {
-            if (sig_queue->sigdelivered & SIGMASK(i)) {
-                sig_queue->sigdelivered &= ~SIGMASK(i);
+            if (ctx->sigdelivered & SIGMASK(i)) {
+                ctx->sigdelivered &= ~SIGMASK(i);
                 return 0;
             }
         }
 
-        auto msg = sig_queue->waitq->block(smp::get_thread());
-        if (msg == nullptr) {
+        auto waker = ctx->waitq->block(arch::get_thread());
+        if (waker == nullptr) {
             return -1;
         }
 
-        frg::destruct(memory::mm::heap, msg);
         break;
     }
 
@@ -193,39 +190,33 @@ bool sched::signal::is_valid(int sig) {
 
 bool sched::signal::send_process(process *sender, process *target, int sig) {
     if (!is_valid(sig) && sig != 0) {
-        // TODO: errno
+        arch::set_errno(EINVAL);
         return false;
     }
 
-    auto sig_queue = &target->sig_queue;
+    auto ctx = &target->sig_ctx;
 
     target->sig_lock.irq_acquire();
-    sig_queue->sig_lock.irq_acquire();
+    ctx->lock.irq_acquire();
 
     if (sender != nullptr && !check_perms(sender, target)) {
-        // TODO: errno
-        sig_queue->sig_lock.irq_release();
+        arch::set_errno(EPERM);
+        ctx->lock.irq_release();
         target->sig_lock.irq_release();
         return false;
     }
 
     if (sig != SIGKILL && sig != SIGSTOP) {
         if (target->sigactions[sig - 1].handler.sa_sigaction == SIG_IGN) {
-            sig_queue->sig_lock.irq_release();
+            ctx->lock.irq_release();
             target->sig_lock.irq_release();
             return true;
         }
     }
 
-    auto signal = &sig_queue->queue[sig - 1];
+    ctx->sigpending |= SIGMASK(sig);
 
-    signal->ref = 1;
-    signal->signum = sig;
-    signal->info = frg::construct<siginfo>(memory::mm::heap);
-    signal->notify_queue = frg::construct<ipc::trigger>(memory::mm::heap);
-    signal->notify_queue->add(sig_queue->waitq);
-    sig_queue->sigpending |= SIGMASK(sig);
-    sig_queue->sig_lock.irq_release();
+    ctx->lock.irq_release();
     target->sig_lock.irq_release();
     return true;
 }
@@ -241,168 +232,60 @@ bool sched::signal::send_group(process *sender, process_group *target, int sig) 
     return true;
 }
 
-void sigreturn_kill(sched::process *proc) {
-    proc->kill();
-    for (;;) {
-        asm volatile("hlt");
-    }
-}
-
-void sigreturn_default(sched::process *proc, sched::thread *task, bool block_signals) {
-    irq::off();
-
-    auto sig_queue = &proc->sig_queue;
-    sig_queue->sig_lock.irq_acquire();
-
-    auto signal = &sig_queue->queue[task->sig_context.signum - 1];
-    sig_queue->sigdelivered |= SIGMASK(task->sig_context.signum);
-    signal->notify_queue->arise(smp::get_thread());
-    frg::destruct(memory::mm::heap, signal->notify_queue);
-
-    sig_queue->sig_lock.irq_release();
-
-    auto regs = &task->sig_context.regs;
-    task->reg = *regs;
-
-    memory::pmm::free((void *) task->sig_context.stack);
-
-    if (block_signals) {
-        task->state = sched::thread::READY;
-        proc->block_signals = true;
-    }
-
-    irq::regs r{
-        .r15 = regs->r15,
-        .r14 = regs->r14,
-        .r13 = regs->r13,
-        .r12 = regs->r12,
-        .r11 = regs->r11,
-        .r10 = regs->r10,
-        .r9 = regs->r9,
-        .r8 = regs->r8,
-        .rsi = regs->rsi,
-        .rdi = regs->rdi,
-        .rbp = regs->rbx,
-        .rdx = regs->rdx,
-        .rcx = regs->rcx,
-        .rbx = regs->rbx,
-        .rax = regs->rax,
-
-        .int_no = 0,
-        .err = 0,
-
-        .rip = regs->rip,
-        .cs = regs->cs,
-        .rflags = regs->rflags,
-        .rsp = regs->rsp,
-        .ss = regs->ss,
-    };
-
-    smp::get_locals()->ustack = task->ustack;
-    smp::get_locals()->kstack = task->kstack;
-
-    if (regs->cs & 0x3) {
-        io::swapgs();
-    }
-
-    sigreturn_exit(&r);
-}
-
-void sig_default(sched::process *proc, sched::thread *task, int sig) {
-    switch (sig) {
-		case SIGHUP:
-		case SIGINT:
-		case SIGQUIT:
-		case SIGILL:
-		case SIGTRAP:
-		case SIGBUS:
-		case SIGFPE:
-		case SIGKILL:
-		case SIGUSR1:
-		case SIGSEGV:
-		case SIGUSR2:
-		case SIGPIPE:
-		case SIGALRM:
-		case SIGSTKFLT:
-		case SIGXCPU:
-		case SIGXFSZ:
-		case SIGVTALRM:
-		case SIGPROF:
-		case SIGSYS:
-            sigreturn_kill(proc);
-            break;
-        case SIGSTOP:
-        case SIGTTIN:
-        case SIGTTOU:
-        case SIGTSTP:
-            proc->suspend();
-            break;
-        case SIGCONT:
-            proc->cont();
-            break;
-        case SIGCHLD:
-        case SIGWINCH:
-            break;
-    }
-
-    sigreturn_default(proc, task, false);
-}
-
-int sched::signal::process_signals(process *proc, sched::regs *r) {
-    auto sig_queue= &proc->sig_queue;
-    sig_queue->sig_lock.irq_acquire();
-    if (sig_queue->active == false) {
-        sig_queue->sig_lock.irq_release();
+int sched::signal::process_signals(process *proc, arch::thread_ctx *ctx) {
+    auto proc_ctx = &proc->sig_ctx;
+    proc_ctx->lock.irq_acquire();
+    if (proc_ctx->active == false) {
+        proc_ctx->lock.irq_release();
         return -1;
     }
 
-    if (sig_queue->sigpending == 0) {
-        sig_queue->sig_lock.irq_release();
-        return -1;
+    if (proc_ctx->sigpending == 0) {
+        proc_ctx->lock.irq_release();
+        return 1;
     }
 
     for (size_t i = 1; i <= SIGNAL_MAX; i++) {
-        if ((sig_queue->sigpending & (SIGMASK(i))) && !(sig_queue->sigmask & SIGMASK(i))) {
-            auto signal = &sig_queue->queue[i - 1];
-            auto action = &proc->sigactions[signal->signum - 1];
+        if (proc_ctx->sigpending & (SIGMASK(i))) {
+            auto task = proc->pick_thread(i);
+            auto task_ctx = &task->sig_ctx;
+            if (!task) {
+                proc_ctx->lock.irq_release();
+                return -1;
+            }
+
+            auto action = &proc->sigactions[i - 1];
+            auto signal = &task_ctx->queue[i - 1];
+
             proc->sig_lock.irq_acquire();
+            task_ctx->lock.irq_acquire();
 
-            auto task = proc->pick_thread();
+            proc_ctx->sigpending &= ~(SIGMASK(i));
+            task_ctx->sigpending &= ~(SIGMASK(i));
 
-            sig_queue->sigpending &= ~(SIGMASK(i));
+            signal->signum = i;
+            signal->notify_queue = frg::construct<ipc::trigger>(memory::mm::heap);
+                        
             if (action->handler.sa_sigaction == SIG_ERR) {
+                task_ctx->lock.irq_release();
                 proc->sig_lock.irq_release();
-                sig_queue->sig_lock.irq_release();
+                proc_ctx->lock.irq_release();
 
                 return -1;
             } else if (action->handler.sa_sigaction == SIG_IGN) {
+                task_ctx->lock.irq_acquire();
                 proc->sig_lock.irq_release();
                 continue;
             }
 
-            ucontext context{};
 
+            task->dispatch_signals = true;
             if (action->handler.sa_sigaction == SIG_DFL) {
                 auto stack = memory::pmm::stack(4);
 
-                context.stack = (uint64_t) stack;
-                context.regs = *r;
-                context.signum = signal->signum;
-
-                memset(r, 0, sizeof(regs));
-
-                r->ss = 0x10;
-                r->cs = 0x8;
-                r->rsp = context.stack;
-                r->rflags = 0x202;
-
-                r->rdi = (uint64_t) proc;
-                r->rsi = (uint64_t) task;
-                r->rdx = signal->signum;
-                r->rip = (uint64_t) sig_default;
-
-                r->cr3 = (uint64_t) memory::vmm::cr3(proc->mem_ctx);
-                task->sig_context = context;
+                task->ucontext.stack = (uint64_t) stack;
+                
+                arch::init_default_sigreturn(task, ctx, signal, &task->ucontext);
 
                 auto tmp = task->kstack;
                 task->kstack = task->sig_kstack;
@@ -410,49 +293,17 @@ int sched::signal::process_signals(process *proc, sched::regs *r) {
 
                 task->sig_ustack = task->ustack;
 
+                task_ctx->lock.irq_release();
                 proc->sig_lock.irq_release();
-                sig_queue->sig_lock.irq_release();
+                proc_ctx->lock.irq_release();
 
                 return 0;
             }
 
-            auto stack = (uint64_t) memory::vmm::map(nullptr, 4 * memory::common::page_size, VMM_PRESENT | VMM_WRITE | VMM_USER, proc->mem_ctx) + (4 * memory::common::page_size);
-            context.stack = stack;
-            context.regs = *r;
-            context.signum = signal->signum;
-
-            memset(r, 0, sizeof(regs));
-
-            stack -= 128;
-            stack &= -1611;
-            stack -= sizeof(siginfo);
-            siginfo *info = (siginfo *) stack;
-            *info = *signal->info;
-
-            info->si_signo = signal->signum;
-
-            stack -= sizeof(sched::regs);
-            ucontext *uctx = (ucontext *) stack;
-            *uctx = context;
-
-            stack -= sizeof(uint64_t);
-            *(uint64_t *) stack = (uint64_t) action->sa_restorer;
-
-            task->sig_context = context;
-
-            r->ss = 0x23;
-            r->cs = 0x1B;
-            r->rsp = stack;
-            r->rflags = 0x202;
-            r->rip = (uint64_t) action->handler.sa_sigaction;
-
-            r->rdi = signal->signum;
-            r->cr3 = (uint64_t) memory::vmm::cr3(proc->mem_ctx);
-
-            if (action->sa_flags & SA_SIGINFO) {
-                r->rsi = (uint64_t) info;
-                r->rdx = (uint64_t) uctx;
-            }
+            auto stack = (size_t) proc->mem_ctx->stack(nullptr, 4 * memory::page_size, vmm::map_flags::USER | vmm::map_flags::WRITE);
+            task->ucontext.stack = stack;
+            
+            arch::init_user_sigreturn(task, ctx, signal, action, &task->ucontext);
 
             auto tmp = task->kstack;
             task->kstack = task->sig_kstack;
@@ -462,28 +313,30 @@ int sched::signal::process_signals(process *proc, sched::regs *r) {
             task->ustack = stack;
             task->sig_ustack = tmp;
 
+            task_ctx->lock.irq_release();
             proc->sig_lock.irq_release();
 
             break;
         }
     }
 
-    sig_queue->sig_lock.irq_release();
+    proc_ctx->lock.irq_release();
     return 0;
 }
 
-bool sched::signal::is_blocked(process *proc, int sig) {
+bool sched::signal::is_blocked(thread *task, int sig) {
     if (!is_valid(sig)) {
         return true;
     }
 
-    proc->sig_queue.sig_lock.irq_acquire();
-    if (proc->sig_queue.sigmask & SIGMASK(sig)) {
-        proc->sig_queue.sig_lock.irq_release();
+    auto ctx = &task->sig_ctx;
+    ctx->lock.irq_acquire();
+    if (ctx->sigmask & SIGMASK(sig)) {
+        ctx->lock.irq_release();
         return false;
     }
 
-    proc->sig_queue.sig_lock.irq_release();
+    ctx->lock.irq_release();
     return true;
 }
 
@@ -492,13 +345,14 @@ bool sched::signal::is_ignored(process *proc, int sig) {
         return true;
     }
 
-    proc->sig_queue.sig_lock.irq_acquire();
+    auto ctx = &proc->sig_ctx;
+    ctx->lock.irq_acquire();
     sigaction *act = &proc->sigactions[sig - 1];
     if (act->handler.sa_sigaction == SIG_IGN) {
-        proc->sig_queue.sig_lock.irq_release();
+        ctx->lock.irq_release();
         return true;
     }
 
-    proc->sig_queue.sig_lock.irq_release();
+    ctx->lock.irq_release();
     return false;
 }

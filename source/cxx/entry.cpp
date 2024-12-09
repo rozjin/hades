@@ -1,3 +1,5 @@
+#include "arch/types.hpp"
+#include "arch/vmm.hpp"
 #include "driver/keyboard.hpp"
 #include "driver/net/e1000.hpp"
 #include "driver/tty/tty.hpp"
@@ -7,6 +9,7 @@
 #include "mm/common.hpp"
 #include "sys/sched/wait.hpp"
 #include "sys/sched/signal.hpp"
+#include "util/types.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <driver/ahci.hpp>
@@ -21,10 +24,7 @@
 #include <sys/acpi.hpp>
 #include <sys/x86/apic.hpp>
 #include <sys/pci.hpp>
-#include <sys/smp.hpp>
-#include <sys/irq.hpp>
 #include <sys/sched/sched.hpp>
-#include <sys/pit.hpp>
 #include <util/stivale.hpp>
 #include <util/log/qemu.hpp>
 #include <util/log/serial.hpp>
@@ -39,6 +39,8 @@ extern "C" {
 }
 
 static stivale::boot::tags::framebuffer fbinfo{};
+static log::subsystem logger = log::make_subsystem("HADES");
+
 void initarray_run() {
 	uintptr_t start = (uintptr_t) &_init_array_begin;
 	uintptr_t end = (uintptr_t) &_init_array_end;
@@ -50,10 +52,31 @@ void initarray_run() {
 }
 
 static void run_init() {
-    auto ctx = (memory::vmm::vmm_ctx *) memory::vmm::create();
-    auto stack = (uint64_t) memory::vmm::map(nullptr, 4 * memory::common::page_size, VMM_PRESENT | VMM_USER | VMM_WRITE | VMM_MANAGED, (void *) ctx) + (4 * memory::common::page_size);
+    auto ctx = vmm::create();
+    auto stack = ctx->stack(nullptr, 4 * memory::page_size, vmm::map_flags::PRESENT | vmm::map_flags::USER | vmm::map_flags::WRITE | vmm::map_flags::FILL_NOW);
 
-    auto proc = sched::create_process((char *) "init", 0, stack, ctx, 3);
+    auto proc = sched::create_process((char *) "init", 0, (uint64_t) stack, ctx, 3);
+    auto session = frg::construct<sched::session>(memory::mm::heap);
+    auto group = frg::construct<sched::process_group>(memory::mm::heap);
+
+    pid_t sid = 1;
+    pid_t pgid = 1;
+
+    session->sid = sid;
+    session->leader_pgid = pgid;
+
+    group->pgid = pgid;
+    group->leader_pid = proc->pid;
+    group->leader = proc;
+    group->sess = session;
+    group->procs = frg::vector<sched::process *, memory::mm::heap_allocator>();
+
+    group->procs.push(proc);
+    session->groups.push(group);
+
+    proc->group = group;
+    proc->sess = session;
+
     char *argv[] = { (char *)
         "/bin/init", 
         NULL 
@@ -68,11 +91,15 @@ static void run_init() {
     proc->cwd = vfs::resolve_at("/bin", nullptr);
 
     auto fd = vfs::open(nullptr, "/bin/init", proc->fds, 0, O_RDWR);
-    memory::vmm::change(proc->mem_ctx);
-    proc->env.load_elf("/bin/init.elf", fd);
-    proc->main_thread->reg.rip = proc->env.entry;
+    proc->mem_ctx->swap_in();
+    
+    proc->env.load_elf("/bin/init", fd);
+    proc->env.set_entry();
 
-    proc->env.place_params(envp, argv, proc->main_thread);
+    proc->env.load_params(argv, envp);
+    proc->env.place_params(argv, envp, proc->main_thread);
+
+    kmsg(logger, "Trying to run init process, at: %lx", proc->env.entry);
     proc->start();
 }
 
@@ -86,7 +113,6 @@ static void show_splash(vfs::fd_table *table) {
     vfs::read(splash_fd, buffer, info->st_size);
 
     video::vesa::display_bmp(buffer, info->st_size);
-    run_init();
 }
 
 static void kern_task() {
@@ -96,7 +122,7 @@ static void kern_task() {
     vfs::init();
     vfs::devfs::init();
     ahci::init();
-    vfs::mount("/dev/sda2", "/", vfs::fslist::FAT, 0);
+    vfs::mount("/dev/sdb1", "/", vfs::fslist::EXT, 0);
 
     e1000::init();
 
@@ -109,9 +135,9 @@ static void kern_task() {
     tty::set_active("/dev/tty0", boot_table);
     fb::init(&fbinfo);
 
-    show_splash(boot_table);
-
     kb::init();
+
+    run_init();
 
     while (true) {
         asm volatile("hlt");
@@ -127,34 +153,27 @@ extern "C" {
         fbinfo = *stivale::parser.fb();
         video::vesa::init(fbinfo);
 
-        util::kern >> log::loggers::qemu;
-        util::kern >> video::vesa::log;
-        util::kern >> log::loggers::serial;
-
-        kmsg("Booted by ", header->brand, " version ", header->version);
+        kmsg(logger, "Booted by ", header->brand, " version ", header->version);
 
         acpi::init(stivale::parser.rsdp());
 
-        irq::setup();
-        irq::hook();
+        arch::init_irqs();
 
         memory::pmm::init(stivale::parser.mmap());
-        memory::vmm::init();
+        vmm::init();
 
-        smp::init();
-        smp::tss::init();
-        
         acpi::madt::init();
-        apic::init();
-        
-        pci::init();
-        sched::init();
-        pit::init();
 
-        auto kern_thread = sched::create_thread(kern_task, (uint64_t) memory::pmm::stack(4), memory::vmm::common::boot_ctx, 0);
+        sched::init();
+        arch::init_smp();
+
+        pci::init();
+        arch::init_timer();
+
+        auto kern_thread = sched::create_thread(kern_task, (uint64_t) memory::pmm::stack(4), vmm::boot, 0);
         kern_thread->start();
         
-        irq::on();
+        arch::irq_on();
         while (true) {
             asm volatile("pause");
         }

@@ -16,23 +16,24 @@ args = parser.parse_args()
 
 source_dir = Path(args.source).resolve()
 build_dir = Path(args.build).resolve()
+scripts_dir = Path(source_dir, "..", "scripts").resolve()
 sysroot_dir = Path(args.sys).resolve()
-mount_dir = Path("/mnt/loop", f"{args.name}").resolve()
+mount_dir = Path("/mnt", f"{args.name}").resolve()
 
 kernel_path = Path(args.kernel).resolve()
-image_path = Path(args.build, f"{args.name}.img").resolve()
-vmdk_path = Path(args.build, f"{args.name}.vmdk").resolve()
+image_path = Path(build_dir, f"{args.name}.img").resolve()
+vmdk_path = Path(build_dir, f"{args.name}.vmdk").resolve()
 
-def do_parts():
+qcow2_path = Path(source_dir, "..", "hades.qcow2").resolve()
+
+def do_boot_disk():
     image_path.touch(exist_ok = True)
 
-    subprocess.run(["dd", "if=/dev/zero", "bs=1G", "count=2", f"of={str(image_path)}"])
+    subprocess.run(["dd", "if=/dev/zero", "bs=4M", "count=128", f"of={str(image_path)}"])
 
     subprocess.run(["parted", "-s", str(image_path), "mklabel", "msdos"])
-    subprocess.run(["parted", "-s", str(image_path), "mkpart", "primary", "1", '50%'])
-    subprocess.run(["parted", "-s", str(image_path), "mkpart", "primary", "50%", "100%"])
+    subprocess.run(["parted", "-s", str(image_path), "mkpart", "primary", "2048s", '100%'])
 
-def do_echfs():
     subprocess.run(["echfs-utils", "-m", "-p0", str(image_path), "quick-format", "512"])
     subprocess.run(["echfs-utils", "-m", "-p0", str(image_path), "import", str(Path(source_dir, "misc", "limine.cfg").resolve()), "limine.cfg"])
     subprocess.run(["echfs-utils", "-m", "-p0", str(image_path), "import", str(Path(source_dir, "misc", "limine.sys").resolve()), "limine.sys"])
@@ -46,60 +47,16 @@ def do_echfs():
     """
 
     subprocess.run(["echfs-utils", "-m", "-p0", str(image_path), "import", str(kernel_path), kernel_path.name])
-
-def do_losetup():
-    subprocess.run(["fdisk", str(image_path)], input = """
-t
-2
-ef
-
-w
-q
-""", text = True)    
-    part_offset = subprocess.check_output([f"parted -s {str(image_path)} unit s print | sed 's/^ //g' | grep \"^2 \" | tr -s ' ' | cut -d ' ' -f2 |  sed 's/s//g'"], shell = True, text = True).strip()
-    subprocess.run(["mkfs.vfat", "-F", "32", "--offset", part_offset, str(image_path)])
-
-    free_device = subprocess.check_output(["losetup", "-f"], text = True).strip()
-    subprocess.run(["sudo", "losetup", "--partscan", free_device, str(image_path)])
-
-    mount_dir.mkdir(parents = True, exist_ok = True)
-    subprocess.run(["sudo", "mount", "-o", "uid=1000,gid=1000", f"{free_device}p2", str(mount_dir)])
-
-    return free_device
-
-def do_efi():
-    """
-    sudo mkdir -p ${MESON_MOUNT_DIR}/EFI/BOOT
-    sudo cp ${MESON_KERNEL} ${MESON_MOUNT_DIR}
-    sudo cp ${MESON_SOURCE_DIR}/misc/limine.efi ${MESON_MOUNT_DIR}/EFI/BOOT/BOOTX64.EFI
-    """
-    efi_dir = Path(mount_dir, "EFI", "BOOT").resolve()
-    efi_dir.mkdir(parents = True, exist_ok = True)
-
-    loader_dest = Path(efi_dir, "BOOTX64.EFI").resolve()
-    loader_file = Path(source_dir, "misc", "limine.efi").resolve()
-
-    print(sysroot_dir)
-
-    shutil.copy(loader_file, loader_dest)
-    shutil.copytree(sysroot_dir, mount_dir, dirs_exist_ok=True)
-
-def do_limine_install(device):
-    subprocess.run(["sudo", "umount", str(mount_dir)])
-    subprocess.run(["sudo", "losetup", "-d", device])
-
+def do_limine_install():
     subprocess.run([Path(source_dir, "misc", "limine-install").resolve(), str(image_path)])
 
-    """
-    ${MESON_SOURCE_DIR}/misc/limine-install ${MESON_IMG}
-    """
+def do_sysroot():
+    shutil.copytree(sysroot_dir, mount_dir, dirs_exist_ok=True)
 
 def do_vmdk():
     subprocess.run(["qemu-img", "convert", "-O", "vmdk", str(image_path), str(vmdk_path)])
 
-do_parts()
-do_echfs()
-device = do_losetup()
-do_efi()
-do_limine_install(device)
-do_vmdk()
+do_boot_disk()
+do_limine_install()
+# do_sysroot()
+# do_vmdk()

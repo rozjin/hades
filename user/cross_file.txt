@@ -1,0 +1,12 @@
+[binaries]
+c = 'x86_64-hades-gcc'
+cpp = 'x86_64-hades-g++'
+ar = 'x86_64-hades-ar'
+strip = 'x86_64-hades-strip'
+pkg_config = 'pkg-config'
+
+[host_machine]
+system = 'hades'
+cpu_family = 'x86_64'
+cpu = 'x86_64'
+endian = 'little'

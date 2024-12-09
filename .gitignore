@@ -1,5 +1,12 @@
 /.cache/
-/.vscode/
-/build/
+
+/build*/
+
 /sys/
-/user/
+/user/*
+
+!/user/patches
+!/user/cross_file.txt
+!/user/native_file.txt
+
+persist.img

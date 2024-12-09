@@ -11,8 +11,8 @@
 #include <mm/mm.hpp>
 #include <util/lock.hpp>
 #include <util/log/log.hpp>
-#include <util/shared.hpp>
 #include <util/types.hpp>
+#include <util/errors.hpp>
 
 namespace sched {
     class process;
@@ -42,23 +42,6 @@ namespace vfs {
         return path.sub_string(pos + 1);
     }
 
-    struct error {
-        enum {
-            INVAL = 1,
-            ISDIR,
-            NOENT,
-            BUSY,
-            NOTEMPTY,
-            EXIST,
-            XDEV,
-            IO,
-            NOTDIR,
-            BADF,
-            NOSYS,
-            NOFD
-        };
-    };
-    
     struct mflags {
         enum {
             NOSRC = 0x8,
@@ -206,19 +189,19 @@ namespace vfs {
             }
 
             virtual ssize_t readdir(node *dir) {
-                return -error::NOSYS;
+                return -ENOTSUP;
             }
 
             virtual ssize_t on_open(vfs::fd *fd, ssize_t flags) {
-                return -error::NOSYS;
+                return -ENOTSUP;
             }
 
             virtual ssize_t on_close(vfs::fd *fd, ssize_t flags) {
-                return -error::NOSYS;
+                return -ENOTSUP;
             }
 
             virtual ssize_t read(node *file, void *buf, size_t len, off_t offset) {
-                return -error::NOSYS;
+                return -ENOTSUP;
             }
 
             virtual void *mmap(node *file, void *addr, size_t len, off_t offset) {
@@ -226,7 +209,7 @@ namespace vfs {
             }
 
             virtual ssize_t write(node *file, void *buf, size_t len, off_t offset) {
-                return -error::NOSYS;
+                return -ENOTSUP;
             }
 
             virtual ssize_t truncate(node *file, off_t offset) {
@@ -234,31 +217,31 @@ namespace vfs {
             }
 
             virtual ssize_t ioctl(node *file, size_t req, void *buf) {
-                return -error::NOSYS;
+                return -ENOTSUP;
             }
 
             virtual ssize_t create(node *dst, path name, int64_t type, int64_t flags) {
-                return -error::NOSYS;
+                return -ENOTSUP;
             }
 
             virtual ssize_t mkdir(node *dst, frg::string_view name, int64_t flags) {
-                return -error::NOSYS;
+                return -ENOTSUP;
             }
 
             virtual ssize_t rename(node *src, node *dst, frg::string_view name, int64_t flags) {
-                return -error::NOSYS;
+                return -ENOTSUP;
             }
 
             virtual ssize_t link(node *src, node *dst, frg::string_view name, bool is_symlink) {
-                return -error::NOSYS;
+                return -ENOTSUP;
             }
 
             virtual ssize_t unlink(node *dst) {
-                return -error::NOSYS;
+                return -ENOTSUP;
             }
 
             virtual ssize_t remove(node *dst) {
-                return -error::NOSYS;
+                return -ENOTSUP;
             }
     };
 

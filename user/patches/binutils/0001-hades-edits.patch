@@ -1,0 +1,115 @@
+From 9a98068e0f1888b0dac71cbfb6961c96af323900 Mon Sep 17 00:00:00 2001
+From: Yavuz Rao <yavuz.rao@gmail.com>
+Date: Sun, 8 Dec 2024 19:09:19 -0500
+Subject: [PATCH] hades edits
+
+---
+ bfd/config.bfd                    | 5 +++++
+ config.sub                        | 2 +-
+ gas/configure.tgt                 | 1 +
+ ld/Makefile.am                    | 1 +
+ ld/Makefile.in                    | 2 ++
+ ld/configure.tgt                  | 4 ++++
+ ld/emulparams/elf_x86_64_hades.sh | 1 +
+ 7 files changed, 15 insertions(+), 1 deletion(-)
+ create mode 100644 ld/emulparams/elf_x86_64_hades.sh
+
+diff --git a/bfd/config.bfd b/bfd/config.bfd
+index 6553aac1e99..f535136bfd5 100644
+--- a/bfd/config.bfd
++++ b/bfd/config.bfd
+@@ -705,6 +705,11 @@ case "${targ}" in
+     targ_selvecs="i386_elf32_vec"
+     want64=true
+     ;;
++  x86_64-*-hades*)
++    targ_defvec=x86_64_elf64_vec
++    targ_selvecs=i386_elf32_vec
++    want64=true
++    ;;
+   x86_64-*-netbsd* | x86_64-*-openbsd*)
+     targ_defvec=x86_64_elf64_vec
+     targ_selvecs="i386_elf32_vec iamcu_elf32_vec i386_coff_vec i386_pei_vec x86_64_pe_vec x86_64_pei_vec"
+diff --git a/config.sub b/config.sub
+index 2c6a07ab3c3..7cd169f502d 100755
+--- a/config.sub
++++ b/config.sub
+@@ -1768,7 +1768,7 @@ case $os in
+ 	     | onefs* | tirtos* | phoenix* | fuchsia* | redox* | bme* \
+ 	     | midnightbsd* | amdhsa* | unleashed* | emscripten* | wasi* \
+ 	     | nsk* | powerunix* | genode* | zvmoe* | qnx* | emx* | zephyr* \
+-	     | fiwix* | mlibc* | cos* | mbr* | ironclad* )
++	     | fiwix* | mlibc* | cos* | mbr* | ironclad* | hades* )
+ 		;;
+ 	# This one is extra strict with allowed versions
+ 	sco3.2v2 | sco3.2v[4-9]* | sco5v6*)
+diff --git a/gas/configure.tgt b/gas/configure.tgt
+index d58f21873a3..4589f2e9d96 100644
+--- a/gas/configure.tgt
++++ b/gas/configure.tgt
+@@ -231,6 +231,7 @@ case ${generic_target} in
+   i386-*-elf*)				fmt=elf ;;
+   i386-*-fuchsia*)			fmt=elf ;;
+   i386-*-haiku*)			fmt=elf em=haiku ;;
++  i386-*-hades*)			fmt=elf em=gnu ;;
+   i386-*-genode*)			fmt=elf ;;
+   i386-*-bsd*)				fmt=aout em=386bsd ;;
+   i386-*-netbsd*-gnu* | \
+diff --git a/ld/Makefile.am b/ld/Makefile.am
+index 6a9833e5775..3af6c28ff88 100644
+--- a/ld/Makefile.am
++++ b/ld/Makefile.am
+@@ -464,6 +464,7 @@ ALL_64_EMULATION_SOURCES = \
+ 	eelf_x86_64_cloudabi.c \
+ 	eelf_x86_64_fbsd.c \
+ 	eelf_x86_64_haiku.c \
++    eelf_x86_64_hades.c \
+ 	eelf_x86_64_sol2.c \
+ 	ehppa64linux.c \
+ 	ei386pep.c \
+diff --git a/ld/Makefile.in b/ld/Makefile.in
+index 8639e782cdf..afc4d65ffbe 100644
+--- a/ld/Makefile.in
++++ b/ld/Makefile.in
+@@ -974,6 +974,7 @@ ALL_64_EMULATION_SOURCES = \
+ 	eelf_x86_64_cloudabi.c \
+ 	eelf_x86_64_fbsd.c \
+ 	eelf_x86_64_haiku.c \
++    eelf_x86_64_hades.c \
+ 	eelf_x86_64_sol2.c \
+ 	ehppa64linux.c \
+ 	ei386pep.c \
+@@ -1490,6 +1491,7 @@ distclean-compile:
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/eelf_x86_64.Po@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/eelf_x86_64_cloudabi.Po@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/eelf_x86_64_fbsd.Po@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/eelf_x86_64_hades.Po@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/eelf_x86_64_haiku.Po@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/eelf_x86_64_sol2.Po@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/eh8300elf.Po@am__quote@
+diff --git a/ld/configure.tgt b/ld/configure.tgt
+index f937f78b876..d54ff53987a 100644
+--- a/ld/configure.tgt
++++ b/ld/configure.tgt
+@@ -1009,6 +1009,10 @@ x86_64-*-cloudabi*)	targ_emul=elf_x86_64_cloudabi
+ x86_64-*-haiku*)	targ_emul=elf_x86_64_haiku
+ 			targ_extra_emuls="elf_x86_64 elf_i386_haiku"
+ 			;;
++x86_64-*-hades*)
++			targ_emul=elf_x86_64_hades
++			targ_extra_emuls="elf_x86_64 elf_i386"
++			;;
+ x86_64-*-linux-gnux32)	targ_emul=elf32_x86_64
+ 			targ_extra_emuls="elf_x86_64 elf_i386 elf_iamcu"
+ 			targ_extra_libpath="elf_i386 elf_iamcu elf_x86_64"
+diff --git a/ld/emulparams/elf_x86_64_hades.sh b/ld/emulparams/elf_x86_64_hades.sh
+new file mode 100644
+index 00000000000..f4f4496fc92
+--- /dev/null
++++ b/ld/emulparams/elf_x86_64_hades.sh
+@@ -0,0 +1 @@
++. ${srcdir}/emulparams/elf_x86_64.sh
+\ No newline at end of file
+-- 
+2.45.2
+

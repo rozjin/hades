@@ -31,6 +31,7 @@ namespace apic {
 
     constexpr size_t LAPIC_REG_ID = 0x20;
     constexpr size_t LAPIC_REG_VERSION = 0x30;
+    constexpr size_t LAPIC_REG_TPR = 0x80;
     constexpr size_t LAPIC_REG_APR = 0x90;
     constexpr size_t LAPIC_REG_PPR = 0xA0;
     constexpr size_t LAPIC_REG_EOI = 0xB0;
@@ -65,7 +66,6 @@ namespace apic {
     constexpr size_t LAPIC_LVT_MASK = (1 << 16);
 
     constexpr size_t LAPIC_BASE_MSR = 0x1B;
-    constexpr size_t LAPIC_BASE_MSR_BSP = 0x100;
     constexpr size_t LAPIC_BASE_MSR_ENABLE = 0x800;
 
     constexpr size_t ICR_DEST_SIPI = (0x6 << 8);
@@ -89,6 +89,7 @@ namespace apic {
         void write(uint32_t reg, uint32_t data);
         uint32_t read(uint32_t reg);
         void setup();
+        void set_timer(uint32_t ms);
         void *get_base();
 
         uint64_t id();

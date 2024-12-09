@@ -1,5 +1,4 @@
 [bits 64]
-[extern irq_handler]
 
 section .note.GNU-stack noalloc noexec nowrite progbits
 section .text
@@ -54,13 +53,13 @@ section .text
         pop rax
     %endmacro
 
-	[extern irq_handler]
+	[extern x86_irq_handler]
 	isr_common:
         cld
         pushaq
 
 		mov rdi, rsp
-		call irq_handler
+		call x86_irq_handler
 
         popaq
 

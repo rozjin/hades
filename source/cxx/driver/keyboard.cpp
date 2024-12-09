@@ -1,7 +1,6 @@
-
 #include "driver/keyboard.hpp"
+#include "arch/x86/types.hpp"
 #include "driver/tty/tty.hpp"
-#include "sys/irq.hpp"
 #include "sys/x86/apic.hpp"
 #include "util/io.hpp"
 #include <cstddef>
@@ -65,7 +64,7 @@ static char *control_sequence[] = {
 };
 
 static int get_character(char *character) {
-    uint8_t code = io::ports::read<uint8_t>(kb::KBD_PS2_DATA);
+    uint8_t code = io::readb(kb::KBD_PS2_DATA);
     bool was_released = code & 0x80;
 
     if (code == 0x2A || code == 0x36
@@ -156,28 +155,28 @@ static int get_character(char *character) {
 void validate();
 
 void enable() {
-    while (io::ports::read<uint8_t>(kb::KBD_PS2_STATUS) & (1 << 1)) asm volatile("pause");
-    io::ports::write(kb::KBD_PS2_COMMAND, (uint8_t) 0xAE);
+    while (io::readb(kb::KBD_PS2_STATUS) & (1 << 1)) asm volatile("pause");
+    io::writeb(kb::KBD_PS2_COMMAND, (uint8_t) 0xAE);
 
-    while (io::ports::read<uint8_t>(kb::KBD_PS2_STATUS) & (1 << 1)) asm volatile("pause");
-    io::ports::write(kb::KBD_PS2_COMMAND, (uint8_t) 0xA8);
+    while (io::readb(kb::KBD_PS2_STATUS) & (1 << 1)) asm volatile("pause");
+    io::writeb(kb::KBD_PS2_COMMAND, (uint8_t) 0xA8);
 }
 
 void disable() {
-    while (io::ports::read<uint8_t>(kb::KBD_PS2_STATUS) & (1 << 1)) asm volatile("pause");
-    io::ports::write(kb::KBD_PS2_COMMAND, (uint8_t) 0xAD);
+    while (io::readb(kb::KBD_PS2_STATUS) & (1 << 1)) asm volatile("pause");
+    io::writeb(kb::KBD_PS2_COMMAND, (uint8_t) 0xAD);
 
-    while (io::ports::read<uint8_t>(kb::KBD_PS2_STATUS) & (1 << 1)) asm volatile("pause");
-    io::ports::write(kb::KBD_PS2_COMMAND, (uint8_t) 0xA7);
+    while (io::readb(kb::KBD_PS2_STATUS) & (1 << 1)) asm volatile("pause");
+    io::writeb(kb::KBD_PS2_COMMAND, (uint8_t) 0xA7);
 }
 
 void flush() {
-    while (io::ports::read<uint8_t>(kb::KBD_PS2_STATUS) & (1 << 0)) {
-        io::ports::read<uint8_t>(kb::KBD_PS2_DATA);
+    while (io::readb(kb::KBD_PS2_STATUS) & (1 << 0)) {
+        io::readb(kb::KBD_PS2_DATA);
     }
 }
 
-void ps2_handler(irq::regs *r) {
+void ps2_handler(arch::irq_regs *r) {
     if (!tty::active_tty) {
         flush();
         return;
@@ -185,7 +184,7 @@ void ps2_handler(irq::regs *r) {
 
     tty::active_tty->in_lock.irq_acquire();
     while (true) {
-        uint8_t status = io::ports::read<uint8_t>(kb::KBD_PS2_STATUS);
+        uint8_t status = io::readb(kb::KBD_PS2_STATUS);
         if (!(status & (1 << 0))) {
             break;
         }
@@ -220,8 +219,8 @@ void kb::init() {
     disable();
     flush();
 
-    irq::add_handler(&ps2_handler, irq::IRQ0 + 1);
-    apic::ioapic::route(0, 1, irq::IRQ0 + 1, false);
+    arch::route_irq(2, 2);
+    arch::install_irq(2, ps2_handler);
 
     enable();
 }

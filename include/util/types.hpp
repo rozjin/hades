@@ -18,20 +18,20 @@ using sigset_t = uint64_t;
 using ssize_t = int64_t;
 using off_t = int64_t;
 
-constexpr int O_CREAT = 1;
-constexpr int O_APPEND = 2;
-constexpr int O_CLOEXEC = 3;
-constexpr int O_EXCL = 4;
-constexpr int O_DIRECTORY = 5;
-constexpr int O_TRUNC = 6;
+constexpr int O_CREAT = 0x000010;
+constexpr int O_APPEND = 0x000008;
+constexpr int O_CLOEXEC = 0x004000;
+constexpr int O_EXCL = 0x000040;
+constexpr int O_DIRECTORY = 0x000020;
+constexpr int O_TRUNC = 0x000200;
 
-constexpr int O_RDONLY = 9;
-constexpr int O_WRONLY = 10;
-constexpr int O_RDWR = 11;
+constexpr int O_RDONLY = 2;
+constexpr int O_WRONLY = 5;
+constexpr int O_RDWR = 3;
 
-constexpr int O_NOCTTY = 12;
+constexpr int O_NOCTTY = 0x000080;
 
-constexpr int AT_FDCWD = 0xFFFFFF9C;
+constexpr int AT_FDCWD = -100;
 constexpr int AT_EMPTY_PATH = 1;
 
 constexpr int SEEK_SET = 1;

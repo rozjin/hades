@@ -4,19 +4,15 @@
 #include <cstdint>
 #include <util/io.hpp>
 
-namespace log {
-    namespace loggers {
+namespace ports {
+    namespace qemu {
         constexpr uint16_t qemuPort = 0xE9;
-        inline void qemu(const char *arg) {
-            if (io::ports::read<uint8_t>(qemuPort) != qemuPort) {
+        inline void write_log(char c) {
+            if (io::readb(qemuPort) != qemuPort) {
                 return;
             }
 
-            char *str = (char *) arg;
-            while (*str) {
-                io::ports::write(qemuPort, *str);
-                str++;
-            }
+            io::writeb(qemuPort, c);
         };
     };
 }

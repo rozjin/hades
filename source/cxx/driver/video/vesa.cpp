@@ -1,8 +1,6 @@
 #include "driver/video/bmp.hpp"
 #include "flanterm/backends/fb.hpp"
 #include "flanterm/flanterm.hpp"
-#include "frg/utility.hpp"
-#include "util/log/log.hpp"
 #include <cstddef>
 #include <driver/video/vesa.hpp>
 
@@ -29,7 +27,7 @@ void video::vesa::init(stivale::boot::tags::framebuffer fbinfo) {
     height = fbinfo.height;
     bpp = fbinfo.bpp;
     pitch = fbinfo.pitch;
-    address = fbinfo.addr + memory::common::virtualBase;
+    address = fbinfo.addr + memory::x86::virtualBase;
 
     ft_ctx = flanterm_fb_init(
         NULL,
@@ -49,8 +47,8 @@ void video::vesa::init(stivale::boot::tags::framebuffer fbinfo) {
     );
 }
 
-void video::vesa::log(const char *arg) {
-    flanterm_write(ft_ctx, arg, strlen(arg));
+void video::vesa::write_log(char c) {
+    flanterm_write(ft_ctx, &c, 1);
 }
 
 size_t abs(int32_t n) {
@@ -58,8 +56,6 @@ size_t abs(int32_t n) {
 }
 
 void video::vesa::display_bmp(void *buf, size_t size) {
-    kmsg("Displaying Splash.");
-
     bmp::file_header *header = (bmp::file_header *) buf;
     bmp::info_header *info = (bmp::info_header *) ((char *) buf + sizeof(bmp::file_header));
     char *image = (char *) buf + header->pixel_off;

@@ -12,7 +12,7 @@ void fb::init(stivale::boot::tags::framebuffer *info) {
     device->height = info->height;
     device->bpp = info->bpp;
     device->pitch = info->pitch;
-    device->address = info->addr + memory::common::virtualBase;
+    device->address = info->addr + memory::x86::virtualBase;
 
     device->id = 0;
     device->major = major;

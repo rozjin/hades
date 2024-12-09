@@ -1,0 +1,139 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Setup Environment",
+            "type": "shell",
+            "linux": {
+                "command": "mkdir -p build"
+            }
+        },
+        
+        {
+            "label": "Build Hades",
+            "type": "shell",
+            "linux": {
+                "command": "meson setup .. && ninja",
+                "options": {
+                    "cwd": "${workspaceRoot}/build"
+                }
+            },
+            "dependsOn": ["Setup Environment"]
+        },
+
+        {
+            "label": "Launch QEMU (No KVM)",
+            "type": "shell",
+            "linux": {
+                "command": "qemu-system-x86_64",
+                "args": [
+                    "-smp", "4",
+                    "-S",
+                    "-gdb", "tcp::1234", "-daemonize",
+                    "-d", "int",
+
+                    "-boot", "c", "-m", "2G",
+                    "-nic", "tap,ifname=tap0,script=no,downscript=no,model=e1000",
+
+                    "-serial", "file:build/qemu.log",
+                    "-monitor", "file:build/monitor.log",
+
+                    "-no-reboot", "-no-shutdown",
+
+                    "-machine", "q35",
+                    "-hda", "build/hades.img",
+
+                    "-drive", "id=disk,file.filename=persist.img,if=none,file.locking=off", 
+                    "-device", "ahci,id=ahci",
+                    "-device", "ide-hd,drive=disk,bus=ahci.1"
+                ]
+            },
+            "dependsOn": ["Build Hades"]
+        },
+
+        {
+            "label": "Launch QEMU (KVM)",
+            "type": "shell",
+            "linux": {
+                "command": "qemu-system-x86_64",
+                "args": [
+                    "--enable-kvm", "-cpu", "host",
+                    "-smp", "4",
+                    "-S",
+                    "-gdb", "tcp::1234", "-daemonize",
+                    "-d", "int",
+
+                    "-boot", "c", "-m", "2G",
+                    "-nic", "tap,ifname=tap0,script=no,downscript=no,model=e1000",
+
+                    "-serial", "file:build/qemu.log",
+                    "-monitor", "file:build/monitor.log",
+
+                    "-no-reboot", "-no-shutdown",
+
+                    "-machine", "q35",
+                    "-hda", "build/hades.img",
+                    "-hdb", "hades.qcow2"
+                ]
+            },
+            "dependsOn": ["Build Hades"]
+        },
+
+        {
+            "label": "Launch QEMU (No KVM, EFI)",
+            "type": "shell",
+            "linux": {
+                "command": "qemu-system-x86_64",
+                "args": [
+                    "-bios", "/usr/share/qemu/OVMF.fd",
+                    "-smp", "4",
+                    "-S",
+                    "-gdb", "tcp::1234", "-daemonize",
+                    "-d", "int",
+
+                    "-boot", "c", "-m", "2G",
+                    "-nic", "tap,ifname=tap0,script=no,downscript=no,model=e1000",
+
+                    "-serial", "file:build/qemu.log",
+                    "-monitor", "file:build/monitor.log",
+
+                    "-no-reboot", "-no-shutdown",
+
+                    "-machine", "q35",
+                    "-hda", "build/hades.img",
+                    "-hdb", "hades.qcow2"
+                ]
+            },
+            "dependsOn": ["Build Hades"]
+        },
+
+        {
+            "label": "Launch QEMU (KVM, EFI)",
+            "type": "shell",
+            "linux": {
+                "command": "qemu-system-x86_64",
+                "args": [
+                    "-bios", "/usr/share/qemu/OVMF.fd",
+                    "--enable-kvm", "-cpu", "host",
+                    "-smp", "4",
+                    "-S",
+                    "-gdb", "tcp::1234", "-daemonize",
+                    "-d", "int",
+
+                    "-boot", "c", "-m", "2G",
+                    "-nic", "tap,ifname=tap0,script=no,downscript=no,model=e1000",
+
+                    "-serial", "file:build/qemu.log",
+                    "-monitor", "file:build/monitor.log",
+
+                    "-no-reboot", "-no-shutdown",
+
+                    "-machine", "q35",
+                    "-hda", "build/hades.img",
+                    "-hdb", "hades.qcow2"
+                ]
+            },
+            "dependsOn": ["Build Hades"]
+        }
+    ]
+}

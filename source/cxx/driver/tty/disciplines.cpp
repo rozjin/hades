@@ -1,10 +1,10 @@
-#include "mm/mm.hpp"
-#include "sys/irq.hpp"
-#include "sys/smp.hpp"
-#include "util/ring.hpp"
+#include "arch/types.hpp"
+#include <arch/x86/types.hpp>
 #include <cstddef>
 #include <driver/tty/tty.hpp>
 #include <driver/tty/termios.hpp>
+#include <mm/mm.hpp>
+#include <util/ring.hpp>
 
 bool ignore_char(tty::termios termios, char c) {
     if (c == '\r' && (termios.c_iflag & IGNCR)) {
@@ -61,7 +61,8 @@ bool new_line(tty::termios termios, char c) {
 }
 
 ssize_t tty::device::read_canon(void *buf, size_t len) {
-    char *chars = (char *) buf;
+    char *chars = (char *) kmalloc(len);
+
     size_t count = 0;
     canon_lock.irq_acquire();
     acquire_chars:
@@ -82,6 +83,14 @@ ssize_t tty::device::read_canon(void *buf, size_t len) {
             }
 
             canon_lock.irq_release();
+
+            auto not_copied = arch::copy_to_user(buf, chars, count);
+            if (not_copied) {
+                kfree(chars);
+                return count - not_copied;
+            }
+            
+            kfree(chars);
             return count;
         }
 
@@ -91,12 +100,14 @@ ssize_t tty::device::read_canon(void *buf, size_t len) {
         canon.push(line_queue);
 
         while (true) {
-            irq::on();
+           x86::irq_on();
 
             while (__atomic_load_n(&in.items, __ATOMIC_RELAXED) == 0) {
-                if (smp::get_process() && smp::get_process()->sig_queue.sigpending) {
+                if (arch::get_process() && arch::get_thread()->sig_ctx.sigpending) {
                     canon_lock.irq_release();
-                    // TODO: errno
+                    arch::set_errno(EINTR);
+
+                    kfree(chars);
                     return -1;
                 }
             }
@@ -152,11 +163,14 @@ ssize_t tty::device::read_canon(void *buf, size_t len) {
 ssize_t tty::device::read_raw(void *buf, size_t len) {
     cc_t min = termios.c_cc[VMIN];
     cc_t time = termios.c_cc[VTIME];
-    char *chars = (char *) buf;
+
+    char *chars = (char *) kmalloc(len);
     size_t count = 0;
 
     if (min == 0 && time == 0) {
         if (__atomic_load_n(&in.items, __ATOMIC_RELAXED) == 0) {
+
+            kfree(chars);
             return 0;
         }
 
@@ -180,13 +194,22 @@ ssize_t tty::device::read_raw(void *buf, size_t len) {
             driver->flush(this);
         in_lock.irq_release();
 
+        auto not_copied = arch::copy_to_user(buf, chars, count);
+        if (not_copied) {
+            kfree(chars);
+            return count - not_copied;
+        }
+
+        kfree(chars);
         return count;
     } else if (min > 0 && time == 0) {
-        irq::on();
+        arch::irq_on();
 
         while (__atomic_load_n(&in.items, __ATOMIC_RELAXED) < min) {
-            if (smp::get_process() && smp::get_process()->sig_queue.sigpending) {
-                // TODO: errno
+            if (arch::get_process() && arch::get_thread()->sig_ctx.sigpending) {
+                arch::set_errno(EINTR);
+            
+                kfree(chars);
                 return -1;
             }
         }
@@ -208,9 +231,17 @@ ssize_t tty::device::read_raw(void *buf, size_t len) {
             driver->flush(this);
         in_lock.irq_release();
 
+        auto not_copied = arch::copy_to_user(buf, chars, count);
+        if (not_copied) {
+            kfree(chars);
+            return count - not_copied;
+        }
+
+        kfree(chars);
         return count;
     } else {
         // TODO: time != but min < 0
+        kfree(chars);
         return -1;
     }
 }

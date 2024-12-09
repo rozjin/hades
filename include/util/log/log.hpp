@@ -1,26 +1,11 @@
 #ifndef LOG_HPP
 #define LOG_HPP
 
-#include <cstddef>
-#include <cstdint>
 #include <util/lock.hpp>
-#include <sys/irq.hpp>
 #include <sys/x86/apic.hpp>
 #include <util/io.hpp>
 
 namespace util {
-    static constexpr auto endl = "\n";
-
-    template<typename T>
-    static constexpr void *hex(T val) {
-        return (void *) val;
-    }
-
-    template<typename T>
-    static constexpr size_t dec(T val) {
-        return (size_t) val;
-    }
-
     static constexpr auto digits_upper = "0123456789ABCDEF";
     static constexpr auto digits_lower = "0123456789abcdef";
     inline char *num_fmt(char *buf, size_t buf_len, uint64_t i, int base, int padding, char pad_with, int handle_signed, int upper, int len) {
@@ -54,85 +39,27 @@ namespace util {
 
         return ptr;
     }    
-    
-    class stream {
-        public:
-            typedef void (*logger)(const char *str);
-        private:
-            static constexpr auto log_size = 1000;
-            static constexpr auto num_buf_len = 48;
+}
 
-            char num_buf[num_buf_len];
-            logger loggers[32] = { 0 };
-
-        public:
-            stream& operator <<(const char *arg) {
-                for (int i = 0; i < 32; i++) {
-                    if (loggers[i] != 0) {
-                        loggers[i](arg);
-                    }
-                }
-                return *this;
-            };
-
-            stream& operator <<(char *arg) {
-                *this << (const char *) arg;
-                return *this;
-            };
-
-            stream& operator <<(size_t arg) {
-                auto fmt = num_fmt(num_buf, num_buf_len, (uint64_t) arg, 10, 0, ' ', ((int64_t) arg > 0) ? 0 : 1, 0, -1);
-                *this << fmt;
-                return *this;
-            };
-
-            stream& operator <<(void *arg) {
-                auto fmt = num_fmt(num_buf, num_buf_len, (uint64_t) arg, 16, 0, ' ', 0, 0, 16);
-                *this << fmt;
-                return *this;
-            };
-
-            stream& operator <<(bool arg) {
-                *this << (arg ? "true" : "false");
-                return *this;
-            }
-
-            template<typename T>
-            stream& operator <<(T obj) {
-                if constexpr(std::is_pointer_v<T>) {
-                    *this << (void *) obj;
-                    return *this;
-                }
-                
-                if constexpr(std::is_integral_v<T>) {
-                    *this << (size_t) obj;
-                    return *this;
-                }
- 
-                *this << (void *) &obj;
-                return *this;
-            };
-
-            stream& operator >>(util::stream::logger logger) {
-                for (int i = 0; i < 32; i++) {
-                    if (loggers[i] == 0) {
-                        loggers[i] = logger;
-                        return *this;
-                    }
-                }
-                return *this;
-            } 
+struct log {
+    enum class level {
+        TRACE,
+        DEBUG,
+        INFO,
+        WARN,
+        ERR
     };
-    
-    inline util::lock log_lock{};
-    inline util::stream kern{};
+
+
+    struct subsystem {
+        int id;
+        const char *prefix;
+    };
+
+    static subsystem make_subsystem(const char *prefix);
 };
 
-template<typename... Args>
-void kmsg(const Args& ...args) {
-    util::log_lock.irq_acquire();
-    ((util::kern << "[K] " )<< ... << args) << util::endl;
-    util::log_lock.irq_release();
-}
+void kmsg(log::subsystem subsystem, log::level level, const char *fmt, ...);
+void kmsg(log::subsystem subsystem, const char *fmt, ...);
 
 #endif

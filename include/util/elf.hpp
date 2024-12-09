@@ -2,7 +2,7 @@
 #define ELF_HPP
 
 
-#include "fs/vfs.hpp"
+#include <fs/vfs.hpp>
 #include <frg/vector.hpp>
 #include <mm/mm.hpp>
 #include <mm/vmm.hpp>
@@ -40,6 +40,10 @@
 #define ELF_PT_HOIS 0x6fffffff
 #define ELF_PT_LOPROC 0x70000000
 #define ELF_PT_HIPROC 0x7fffffff
+
+#define ELF_PF_X 0x1
+#define ELF_PF_W 0x2
+#define ELF_PF_R 0x4
 
 #define SHT_SYMTAB 0x2
 #define SHT_STRTAB 0x3
@@ -112,21 +116,19 @@ namespace elf {
         size_t len;
     };
 
-    using ssize_t = long long;
-
     struct file {
         uintptr_t load_offset;
         vfs::fd *fd;
-        memory::vmm::vmm_ctx *ctx;
+        vmm::vmm_ctx *ctx;
 
         elf64_hdr *header;
         elf::aux aux;
 
-        elf64_phdr *phdr;
-        elf64_shdr *shdr;
-        elf64_shdr *shstrtab_hdr;
-        elf64_shdr *strtab_hdr;
-        elf64_shdr *symtab_hdr;
+        elf64_phdr *phdrs;
+        elf64_shdr *shdrs;
+        elf64_shdr *shstrtab_hdrs;
+        elf64_shdr *strtab_hdrs;
+        elf64_shdr *symtab_hdrs;
 
         void *shstrtab;
         void *strtab;

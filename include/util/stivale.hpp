@@ -143,7 +143,7 @@ namespace stivale {
                         }
                     }
 
-                    return highest_page / memory::common::page_size;
+                    return highest_page / memory::page_size;
                 }
 
                 void *find_free(size_t length) {
@@ -215,18 +215,18 @@ namespace stivale {
                 stivale::boot::info::processor processors[];
 
                 stivale::boot::info::processor *begin() {
-                    return memory::common::offsetVirtual(processors);
+                    return memory::add_virt(processors);
                 }
 
                 stivale::boot::info::processor *end() {
-                    return &(memory::common::offsetVirtual(processors)[cpu_count]);
+                    return &(memory::add_virt(processors)[cpu_count]);
                 }
 
                 stivale::boot::info::processor *get_cpu(size_t lid) {
                     for (size_t i = 0; i < cpu_count; i++) {
-                        auto cpu = (memory::common::offsetVirtual(processors))[i];
+                        auto cpu = memory::add_virt(processors)[i];
                         if (cpu.lapic_id == lid) {
-                            return &(memory::common::offsetVirtual(processors)[i]);
+                            return &(memory::add_virt(processors)[i]);
                         }
                     }
 
@@ -245,7 +245,7 @@ namespace stivale {
             }
 
             info_parser(stivale::boot::header *header) {
-                this->header = memory::common::offsetVirtual(header);
+                this->header = memory::add_virt(header);
             }
 
             stivale::boot::tags::framebuffer *fb() {
@@ -259,9 +259,9 @@ namespace stivale {
             }
 
             stivale::boot::tags::smp *smp() {
-                for (uint64_t tag = memory::common::offsetVirtual(header)->tags; tag != 0; tag = (memory::common::offsetVirtual(((stivale::tag *) tag))->next)) {
-                    if (memory::common::offsetVirtual(((stivale::tag *) tag))->identifier == stivale::boot::tag_id::smp) {
-                        return memory::common::offsetVirtual((stivale::boot::tags::smp *) tag);
+                for (uint64_t tag = memory::add_virt(header)->tags; tag != 0; tag = (memory::add_virt(((stivale::tag *) tag))->next)) {
+                    if (memory::add_virt(((stivale::tag *) tag))->identifier == stivale::boot::tag_id::smp) {
+                        return memory::add_virt((stivale::boot::tags::smp *) tag);
                     }
                 }
 

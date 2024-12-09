@@ -4,6 +4,7 @@
 #include <util/io.hpp>
 #include <util/log/log.hpp>
 
+static log::subsystem logger = log::make_subsystem("PCI");
 uint8_t pci::device::get_bus() {
     return bus;
 }
@@ -47,33 +48,33 @@ static inline uint32_t get_address(uint8_t bus, uint8_t slot, uint8_t func, uint
 }
 
 uint32_t pci::read_dword(uint8_t bus, uint8_t slot, uint8_t func, uint8_t reg) {
-    io::ports::write<uint32_t>(pci::CONFIG_PORT, get_address(bus, slot, func, reg));
-    return io::ports::read<uint32_t>(pci::DATA_PORT + (reg & 3));
+    io::writed(pci::CONFIG_PORT, get_address(bus, slot, func, reg));
+    return io::readd(pci::DATA_PORT + (reg & 3));
 }
 
 void pci::write_dword(uint8_t bus, uint8_t slot, uint8_t func, uint8_t reg, uint32_t data) {
-    io::ports::write<uint32_t>(pci::CONFIG_PORT, get_address(bus, slot, func, reg));
-    io::ports::write<uint32_t>(pci::DATA_PORT + (reg & 3), data);
+    io::writed(pci::CONFIG_PORT, get_address(bus, slot, func, reg));
+    io::writed(pci::DATA_PORT + (reg & 3), data);
 }
 
 uint16_t pci::read_word(uint8_t bus, uint8_t slot, uint8_t func, uint8_t reg) {
-    io::ports::write<uint32_t>(pci::CONFIG_PORT, get_address(bus, slot, func, reg));
-    return io::ports::read<uint16_t>(pci::DATA_PORT + (reg & 3));
+    io::writed(pci::CONFIG_PORT, get_address(bus, slot, func, reg));
+    return io::readw(pci::DATA_PORT + (reg & 3));
 }
 
 void pci::write_word(uint8_t bus, uint8_t slot, uint8_t func, uint8_t reg, uint16_t data) {
-    io::ports::write<uint32_t>(pci::CONFIG_PORT, get_address(bus, slot, func, reg));
-    io::ports::write<uint16_t>(pci::DATA_PORT + (reg & 3), data);
+    io::writed(pci::CONFIG_PORT, get_address(bus, slot, func, reg));
+    io::writew(pci::DATA_PORT + (reg & 3), data);
 }
 
 uint16_t pci::read_byte(uint8_t bus, uint8_t slot, uint8_t func, uint8_t reg) {
-    io::ports::write<uint32_t>(pci::CONFIG_PORT, get_address(bus, slot, func, reg));
-    return io::ports::read<uint8_t>(pci::DATA_PORT + (reg & 3));
+    io::writed(pci::CONFIG_PORT, get_address(bus, slot, func, reg));
+    return io::readb(pci::DATA_PORT + (reg & 3));
 }
 
 void pci::write_byte(uint8_t bus, uint8_t slot, uint8_t func, uint8_t reg, uint8_t data) {
-    io::ports::write<uint32_t>(pci::CONFIG_PORT, get_address(bus, slot, func, reg));
-    io::ports::write<uint8_t>(pci::DATA_PORT + (reg & 3), data);
+    io::writed(pci::CONFIG_PORT, get_address(bus, slot, func, reg));
+    io::writeb(pci::DATA_PORT + (reg & 3), data);
 }
 
 static inline uint8_t get_secondary_bus(uint8_t bus, uint8_t slot, uint8_t func) {
@@ -213,7 +214,7 @@ int pci::device::register_msi(uint8_t vector, uint8_t lapic_id) {
 
             switch (cap_id) {
                 case 0x05: {
-                    kmsg("[PCI]: Device has MSI support");
+                    kmsg(logger, "Device has MSI support");
                     off = cap_off;
                     break;
                 }
@@ -223,7 +224,7 @@ int pci::device::register_msi(uint8_t vector, uint8_t lapic_id) {
     }
 
     if (off == 0) {
-        kmsg("[PCI]: Device does not support MSI");
+        kmsg(logger, "Device does not support MSI");
         return 0;
     }
 
@@ -540,7 +541,7 @@ static inline void scan_bus(uint8_t bus) {
 void pci::init() {
     scan_bus(0);
 
-    kmsg("[PCI] Detected ", devices.size(), " devices");
+    kmsg(logger, "Detected %u devices", devices.size());
 }
 
 pci::device *pci::get_device(uint8_t cl, uint8_t subcl, uint8_t prog_if) {

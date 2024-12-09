@@ -9,7 +9,7 @@
 namespace video {
     namespace vesa {
         void init(stivale::boot::tags::framebuffer fbinfo);
-        void log(const char *arg);
+        void write_log(char c);
         void display_bmp(void *buf, size_t size);
     };
 }

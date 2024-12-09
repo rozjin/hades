@@ -1,31 +1,21 @@
 #ifndef LOCK_HPP
 #define LOCK_HPP
 
-#include <sys/irq.hpp>
-#include <cstdint>
+#include <arch/types.hpp>
 
 namespace util {
     class lock {
         private:
             volatile bool _lock;
             bool interrupts;
-            bool get_interrupts() {
-                uint64_t rflags = 0;
-                asm volatile ("pushfq; \
-                               pop %0 "
-                               : "=r"(rflags)
-                );
-
-                return (rflags >> 9) & 1;
-            }
         public:
             void acquire() {
                 while(__atomic_test_and_set(&this->_lock, __ATOMIC_ACQUIRE));
             }
             
             void irq_acquire() {
-                interrupts = get_interrupts();
-                irq::off();
+                interrupts = arch::get_irq_state();
+                arch::irq_off();
                 while(__atomic_test_and_set(&this->_lock, __ATOMIC_ACQUIRE));
             }
 
@@ -36,9 +26,7 @@ namespace util {
             void irq_release() {
                 __atomic_clear(&this->_lock, __ATOMIC_RELEASE);
                 if (interrupts) {
-                    irq::on();
-                } else {
-                    irq::off();
+                    arch::irq_on();
                 }
             }
 

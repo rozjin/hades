@@ -1,0 +1,84 @@
+#ifndef _CXXSHIM_ARRAY
+#define _CXXSHIM_ARRAY
+
+#include <cstddef>
+
+namespace std {
+
+template<typename Element, std::size_t Count>
+struct __array_container {
+	using type = Element[Count];
+};
+
+template<typename Element>
+struct __array_container<Element, 0> {
+	struct type {
+		Element &operator[](std::size_t) const noexcept {
+			__builtin_trap();
+		}
+
+		constexpr explicit operator Element*() const noexcept {
+			return nullptr;
+		}
+	};
+};
+
+template<typename Element, std::size_t Count>
+struct array {
+	typedef Element *pointer;
+	typedef const Element *const_pointer;
+	typedef Element &reference;
+	typedef const Element &const_reference;
+	typedef Element *iterator;
+	typedef const Element *const_iterator;
+
+	typename __array_container<Element, Count>::type elements_;
+
+	[[nodiscard]] constexpr std::size_t size() const noexcept {
+		return Count;
+	}
+
+	[[nodiscard]] constexpr std::size_t max_size() const noexcept {
+		return Count;
+	}
+
+	[[nodiscard]] constexpr bool empty() const noexcept {
+		return size() == 0;
+	}
+
+	[[nodiscard]] reference operator[](std::size_t n) noexcept {
+		return elements_[n];
+	}
+
+	[[nodiscard]] const_reference operator[](std::size_t n) const noexcept {
+		return elements_[n];
+	}
+
+	[[nodiscard]] pointer data() noexcept {
+		return static_cast<pointer>(elements_);
+	}
+
+	[[nodiscard]] const_pointer data() const noexcept {
+		return static_cast<const_pointer>(elements_);
+	}
+
+	[[nodiscard]] iterator begin() noexcept {
+		return iterator(data());
+	}
+
+	[[nodiscard]] const_iterator begin() const noexcept {
+		return const_iterator(data());
+	}
+
+	[[nodiscard]] iterator end() noexcept {
+		return iterator(data() + Count);
+	}
+
+	[[nodiscard]] const_iterator end() const noexcept {
+		return const_iterator(data() + Count);
+	}
+};
+
+} // namespace std
+
+#endif // _CXXSHIM_ARRAY

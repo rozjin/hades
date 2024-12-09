@@ -1,13 +1,12 @@
-#include "acpispec/resources.h"
+#include "arch/types.hpp"
 #include "driver/net/arp.hpp"
 #include "driver/net/ip.hpp"
 #include "driver/net/types.hpp"
 #include "lai/helpers/pci.h"
 #include "mm/pmm.hpp"
 #include "sys/pci.hpp"
-#include "sys/x86/apic.hpp"
 #include "util/log/log.hpp"
-#include "util/string.hpp"
+#include "util/misc.hpp"
 #include <cstdint>
 #include <mm/common.hpp>
 #include <mm/mm.hpp>
@@ -15,13 +14,16 @@
 #include <util/io.hpp>
 #include <driver/net/e1000.hpp>
 
+static log::subsystem logger = log::make_subsystem("E1000");
+log::subsystem netlog = log::make_subsystem("NET");
+
 e1000::device *net_dev;
 void e1000::device::write(uint16_t off, uint32_t value) {
     if (bar_type) {
         io::mmio::write(mem_base + off, value);
     } else {
-        io::ports::write<uint32_t>(io_base, off);
-        io::ports::write(io_base + 4, value);
+        io::writed(io_base, off);
+        io::writed(io_base + 4, value);
     }
 }
 
@@ -30,8 +32,8 @@ uint32_t e1000::device::read(uint16_t off) {
         return io::mmio::read<uint32_t>(mem_base + off);
     }
 
-    io::ports::write<uint32_t>(io_base, off);
-    return io::ports::read<uint32_t>(io_base + 4);
+    io::writed(io_base, off);
+    return io::readd(io_base + 4);
 }
 
 bool e1000::device::check_eeprom() {
@@ -106,20 +108,20 @@ void e1000::device::reset() {
 }
 
 void e1000::device::rx_init() {
-    uint8_t *rx_base = (uint8_t *) memory::pmm::alloc(((sizeof(rx_desc) * rx_max) / memory::common::page_size) + 1);
+    uint8_t *rx_base = (uint8_t *) memory::pmm::alloc(util::ceil(sizeof(rx_desc) * rx_max, memory::page_size));
 
     rx_desc *descs = (rx_desc *) rx_base;
     for (size_t i = 0; i < rx_max; i++) {
         rx_descs[i] = (rx_desc *) ((uint8_t *) descs + (i * sizeof(rx_desc)));
 
         rx_descs[i]->address = (uint64_t) ((uint8_t *) memory::pmm::alloc(2));
-        rx_descs[i]->address = rx_descs[i]->address - memory::common::virtualBase;
+        rx_descs[i]->address = rx_descs[i]->address - memory::x86::virtualBase;
 
         rx_descs[i]->status = 0;
     }
 
-    write(reg_rx_desc_lo, (uint32_t) ((((uint64_t) rx_base) - memory::common::virtualBase) & 0xFFFFFFFF));
-    write(reg_rx_desc_hi, (uint32_t) ((((uint64_t) rx_base) - memory::common::virtualBase) >> 32));
+    write(reg_rx_desc_lo, (uint32_t) ((((uint64_t) rx_base) - memory::x86::virtualBase) & 0xFFFFFFFF));
+    write(reg_rx_desc_hi, (uint32_t) ((((uint64_t) rx_base) - memory::x86::virtualBase) >> 32));
     write(reg_rx_desc_len, rx_max * sizeof(rx_desc));
 
     write(reg_rx_desc_head, 0);
@@ -131,7 +133,7 @@ void e1000::device::rx_init() {
 }
 
 void e1000::device::tx_init() {
-    uint8_t *tx_base = (uint8_t *) memory::pmm::alloc(((sizeof(tx_desc) * tx_max) / memory::common::page_size) + 1);
+    uint8_t *tx_base = (uint8_t *) memory::pmm::alloc(util::ceil(sizeof(tx_desc) * tx_max, memory::page_size));
 
     tx_desc *descs = (tx_desc *) tx_base;
     for (size_t i = 0; i < tx_max; i++) {
@@ -142,8 +144,8 @@ void e1000::device::tx_init() {
         tx_descs[i]->status = tx_desc::tx_bit_done;
     }
 
-    write(reg_tx_desc_lo, (uint32_t) ((((uint64_t) tx_base) - memory::common::virtualBase) & 0xFFFFFFFF));
-    write(reg_tx_desc_hi, (uint32_t) ((((uint64_t) tx_base) - memory::common::virtualBase) >> 32));
+    write(reg_tx_desc_lo, (uint32_t) ((((uint64_t) tx_base) - memory::x86::virtualBase) & 0xFFFFFFFF));
+    write(reg_tx_desc_hi, (uint32_t) ((((uint64_t) tx_base) - memory::x86::virtualBase) >> 32));
     write(reg_tx_desc_len, tx_max * sizeof(tx_desc));
 
     write(reg_tx_desc_head, 0);
@@ -170,7 +172,7 @@ void e1000::device::rx_handle() {
     uint16_t old_rx_cur;
 
     while ((rx_descs[rx_cur]->status & rx_desc::rx_bit_done)) {
-        uint8_t *buf = (uint8_t *) (rx_descs[rx_cur]->address + memory::common::virtualBase);
+        uint8_t *buf = (uint8_t *) (rx_descs[rx_cur]->address + memory::x86::virtualBase);
         uint16_t len = rx_descs[rx_cur]->length;
 
         net::eth *eth_hdr = (net::eth *) buf;
@@ -267,8 +269,9 @@ void e1000::device::arp_handle(void *pkt, size_t len) {
             arp_table.insert(src_ip, arp_mac);
 
             char *ipv4_str = (char *) kmalloc(16);
-            kmsg("[NET] [ARP]: ", net::ipv4_ntoa(src_ip, ipv4_str), ", is at: ", util::hex(src_mac[0]), ":", util::hex(src_mac[1]), ":", util::hex(src_mac[2]),
-                                    ":", util::hex(src_mac[3]), ":", util::hex(src_mac[4]), ":", util::hex(src_mac[5]));
+
+            kmsg(netlog, "%s is at %x:%x:%x:%x:%x:%x", net::ipv4_ntoa(src_ip, ipv4_str), src_mac[0], src_mac[1], src_mac[2],
+                src_mac[3], src_mac[4], src_mac[5]);
             break;
         }
 
@@ -320,8 +323,7 @@ bool e1000::device::init() {
         write(0x5200 + (i * 4), 0);
     }
 
-    kmsg("[NET]: E1000 MAC: ", util::hex(mac[0]), ":", util::hex(mac[1]), ":", util::hex(mac[2]),
-                            ":", util::hex(mac[3]), ":", util::hex(mac[4]), ":", util::hex(mac[5]));
+    kmsg(logger, "MAC: %x:%x:%x:%x:%x:%x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
     write(reg_fcal, 0);
     write(reg_fcah, 0);
@@ -343,7 +345,7 @@ bool e1000::device::init() {
 }
 
 void e1000::device::send(const void *buf, size_t len) {
-    tx_descs[tx_cur]->address = ((uint64_t) buf) - memory::common::virtualBase;
+    tx_descs[tx_cur]->address = ((uint64_t) buf) - memory::x86::virtualBase;
     tx_descs[tx_cur]->length = len;
 
     tx_descs[tx_cur]->cmd = tx_desc::tx_bit_eop | tx_desc::tx_bit_fcs | tx_desc::tx_bit_rs;
@@ -356,7 +358,7 @@ void e1000::device::send(const void *buf, size_t len) {
     while ((tx_descs[old_tx_cur]->status & tx_desc::tx_bit_done) == 0) { asm volatile("pause"); }
 }
 
-void e1000::irq_handler(irq::regs *r) {
+void e1000::irq_handler(arch::irq_regs *r) {
     uint32_t status = net_dev->read(reg_icr);
     if (status & 0x04) {
         // TODO: read link speed
@@ -372,13 +374,13 @@ void e1000::init() {
     if (!(pci_dev = pci::get_device(intel_id, emu_id))
         && !(pci_dev = pci::get_device(intel_id, i217_id))
         && !(pci_dev = pci::get_device(intel_id, lm_id))) {
-        kmsg("[NET]: No E1000 Network Controllers found");
+        kmsg(netlog, "No E1000 Network Controllers found");
         return;
     }
 
     pci::bar net_bar;
     if (!pci_dev->read_bar(0, net_bar)) {
-        kmsg("[NET]: E1000: Invalid BAR0");
+        kmsg(logger, "Invalid BAR0");
         return;
     }
 
@@ -393,7 +395,7 @@ void e1000::init() {
 
     net_dev->bar_type = bar_type;
     net_dev->io_base = io_base;
-    net_dev->mem_base = mem_base + memory::common::virtualBase;
+    net_dev->mem_base = mem_base + memory::x86::virtualBase;
 
     net_dev->is_e1000e = pci_dev->get_device() == i217_id || pci_dev->get_device() == lm_id;
     net_dev->has_eeprom = false;
@@ -405,16 +407,16 @@ void e1000::init() {
     acpi_resource_t irq_resource;
     auto err = lai_pci_route_pin(&irq_resource, 0, pci_dev->get_bus(), pci_dev->get_slot(), pci_dev->get_func(), pci_dev->read_pin());
     if (err > 0) {
-        kmsg("[NET]: E1000: Unable to initialize interrupts");
+        kmsg(logger, "Unable to initialize interrupts");
         frg::destruct(memory::mm::heap, net_dev);
         return;
     }
 
-    apic::ioapic::route(0, irq_resource.base, irq::IRQ0 + 2, 0);
-    irq::add_handler(e1000::irq_handler, irq::IRQ0 + 2);
+    arch::route_irq(irq_resource.base, 3);
+    arch::install_irq(3, e1000::irq_handler);
 
     net_dev->init();
-    kmsg("[NET]: E1000 device initialized");
+    kmsg(logger, "device initialized");
 
     net_dev->arp_probe();
 }

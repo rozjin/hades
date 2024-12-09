@@ -1,5 +1,5 @@
-#include "lai/core.h"
-#include "lai/helpers/sci.h"
+#include <arch/vmm.hpp>
+#include <lai/core.h>
 #include <cstddef>
 #include <cstdint>
 #include <mm/common.hpp>
@@ -60,6 +60,7 @@ namespace acpi {
     }
 }
 
+static log::subsystem logger = log::make_subsystem("ACPI");
 acpi::sdt *find_table(const char *sig, size_t index) {
     acpi::sdt *ptr;
     size_t count = 0;
@@ -67,9 +68,9 @@ acpi::sdt *find_table(const char *sig, size_t index) {
     if (use_xsdt) {
         for (size_t i = 0; i < (_xsdt->_sdt.length - sizeof(acpi::sdt)) / 8; i++) {
             ptr = (acpi::sdt *) _xsdt->ptrs[i];
-            ptr = (acpi::sdt *) ((char *) ptr + memory::common::virtualBase);
+            ptr = (acpi::sdt *) ((char *) ptr + memory::x86::virtualBase);
             if (!strncmp(ptr->signature, sig, 4)) {
-                kmsg("[ACPI] Found table ", sig);
+                kmsg(logger, "Found table ", sig);
                 if (index == count++) {
                     return ptr;
                 }
@@ -78,9 +79,9 @@ acpi::sdt *find_table(const char *sig, size_t index) {
     } else {
         for (size_t i = 0; i < (_rsdt->_sdt.length - sizeof(acpi::sdt)) / 4; i++) {
             ptr = (acpi::sdt *) ((uint64_t) _rsdt->ptrs[i]);
-            ptr = (acpi::sdt *) ((char *) ptr + memory::common::virtualBase);
+            ptr = (acpi::sdt *) ((char *) ptr + memory::x86::virtualBase);
             if (!strncmp(ptr->signature, sig, 4)) {
-                kmsg("[ACPI] Found table ", sig);
+                kmsg(logger, "Found table ", sig);
                 if (index == count++) {
                     return ptr;
                 }
@@ -93,33 +94,33 @@ acpi::sdt *find_table(const char *sig, size_t index) {
 
 acpi::sdt *acpi::table(const char *sig, size_t index) {
     if (!strncmp(sig, "DSDT", 4)) {
-        if (use_x_dsdt) return (acpi::sdt *) (_fadt->x_dsdt + memory::common::virtualBase);
-        return (acpi::sdt *) (_fadt->dsdt + memory::common::virtualBase); 
+        if (use_x_dsdt) return (acpi::sdt *) (_fadt->x_dsdt + memory::x86::virtualBase);
+        return (acpi::sdt *) (_fadt->dsdt + memory::x86::virtualBase); 
     }
 
     return find_table(sig, index);
 }
 
 void acpi::init(stivale::boot::tags::rsdp *info) {
-    _rsdp = (acpi::rsdp *) (info->rsdp + memory::common::virtualBase);
+    _rsdp = (acpi::rsdp *) (info->rsdp + memory::x86::virtualBase);
     if (!_rsdp) {
         panic("[ACPI] RSDP Not Found!");
     }
 
     if ((_rsdp_check() & 0xF) == 0) {
-        kmsg("[ACPI] RSDP Checksum is ", _rsdp_check());
+        kmsg(logger, "RSDP Checksum is %u", _rsdp_check());
     } else {
         panic("[ACPI] Corrupted RSDP!");
     }
 
-    kmsg("[ACPI] OEM ID ", _rsdp->oemid);
-    kmsg("[ACPI] RSDT Address is ", util::hex((uint64_t) _rsdp->rsdt));
-    kmsg("[ACPI] ACPI Version ", _rsdp->version);
+    kmsg(logger, "OEM ID %s", _rsdp->oemid);
+    kmsg(logger, "RSDT Address is %x", _rsdp->rsdt);
+    kmsg(logger, "ACPI Version %u", _rsdp->version);
 
     _rsdt = (acpi::rsdt *) ((uint64_t) _rsdp->rsdt);
     if (_rsdp->version >= 2) {
-        kmsg("[ACPI] XSDT Address is ", util::hex(_rsdp->xsdt));
-        kmsg("[ACPI] RSDP (ACPI V2) Checksum is ", _xsdt_check());
+        kmsg(logger, "XSDT Address is ", _rsdp->xsdt);
+        kmsg(logger, "RSDP (ACPI V2) Checksum is %u", _xsdt_check());
         if ((_xsdt_check() % 0x100) != 0) {
             panic("[ACPI] Corrupted XSDT!");
         }
@@ -128,14 +129,14 @@ void acpi::init(stivale::boot::tags::rsdp *info) {
         _xsdt = (acpi::xsdt *) _rsdp->xsdt;
     } else {
         if ((_rsdt_check() % 0x100) != 0) {
-            panic("[ACPI] Corrupted RSDT! ", _rsdt_check());
+            panic("[ACPI] Corrupted RSDT! %u", _rsdt_check());
         }
     }
 
-    _rsdt = memory::common::offsetVirtual(_rsdt);
-    _xsdt = memory::common::offsetVirtual(_xsdt);
+    _rsdt = memory::add_virt(_rsdt);
+    _xsdt = memory::add_virt(_xsdt);
     _fadt = (fadt *) find_table("FACP", 0);
-    if (((uint64_t) _fadt) - memory::common::virtualBase >= VMM_4GIB) {
+    if (((uint64_t) _fadt) - memory::x86::virtualBase >= vmm::limit_4g) {
         use_x_dsdt = true;
     }
 
@@ -156,27 +157,27 @@ void acpi::madt::init() {
 
             case 1: {
                 madt::ioapic *ioapic = (madt::ioapic *) item;
-                kmsg("[MADT] Found IOAPIC ", ioapic->id);
+                kmsg(logger, "Found IOAPIC %u", ioapic->id);
                 ioapics.push_back(ioapic);
                 break;
             };
 
             case 2: {
                 madt::iso *iso = (madt::iso *) item;
-                kmsg("[MADT] Found ISO ", isos.size());
+                kmsg(logger, "Found ISO %u", isos.size());
                 isos.push_back(iso);
                 break;
             };
 
             case 4: {
                 madt::nmi *nmi = (madt::nmi *) item;
-                kmsg("[MADT] Found NMI ", nmis.size());
+                kmsg(logger, "Found NMI %u", nmis.size());
                 nmis.push_back(nmi);
                 break;
             };
 
             default:
-                kmsg("[MADT] Unrecognized type ", item[0]);
+                kmsg(logger, "Unrecognized MADT Entry %u", item[0]);
                 break;
         }
 

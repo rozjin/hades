@@ -42,8 +42,8 @@ ssize_t vfs::rootfs::read(node *file, void *buf, size_t len, off_t offset) {
 
 ssize_t vfs::rootfs::create(node *dst, path name, int64_t type, int64_t flags) {
     auto storage = frg::construct<rootfs::storage>(memory::mm::heap);
-    storage->buf = kmalloc(memory::common::page_size);
-    storage->length = memory::common::page_size;
+    storage->buf = kmalloc(memory::page_size);
+    storage->length = memory::page_size;
 
     node *new_file = frg::construct<vfs::node>(memory::mm::heap, this, name, dst, flags, type);
     new_file->private_data = (void *) storage;

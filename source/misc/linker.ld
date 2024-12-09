@@ -6,11 +6,17 @@ SECTIONS {
    . = 0xFFFFFFFF80100000;
 
    .stivale2hdr : ALIGN(4K) {
-      *(.stivale2hdr)
+        *(.stivale2hdr)
    }
 
    .text : ALIGN(4K) {
-      *(.text)
+        *(.text)
+   }
+
+   .ex_table : ALIGN(4K) {
+        _ex_table_begin = .;
+        KEEP(*(.ex_table*))
+        _ex_table_end = .;
    }
 
    .init_array : ALIGN(4K) {
@@ -21,13 +27,13 @@ SECTIONS {
 	}
 
    .data : ALIGN(4K) {
-   	*(.data)
-      *(.rodata)
-      *(.stivale2tags)
+   	    *(.data)
+        *(.rodata)
+        *(.stivale2tags)
    }
 
    .bss : ALIGN(4K) {
-      *(COMMON)
-	   *(.bss)
+        *(COMMON)
+	    *(.bss)
    }
 }

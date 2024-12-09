@@ -6,7 +6,6 @@
 #include <util/string.hpp>
 
 namespace util {
-
     template <typename T>
     class ring {
         private:

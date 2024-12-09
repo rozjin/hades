@@ -1,11 +1,11 @@
-#include "driver/video/vt.hpp"
-#include "driver/tty/tty.hpp"
-#include "flanterm/flanterm.hpp"
-#include "flanterm/backends/fb.hpp"
-#include "fs/dev.hpp"
-#include "mm/common.hpp"
-#include "mm/mm.hpp"
 #include <cstddef>
+#include <driver/video/vt.hpp>
+#include <driver/tty/tty.hpp>
+#include <flanterm/flanterm.hpp>
+#include <flanterm/backends/fb.hpp>
+#include <fs/dev.hpp>
+#include <mm/common.hpp>
+#include <mm/mm.hpp>
 
 void vt::driver::flush(tty::device *tty) {
     tty->out_lock.irq_acquire();
@@ -47,7 +47,7 @@ ssize_t vt::driver::ioctl(tty::device *tty, size_t req, void *buf) {
                     *fb_save->var = *fb->var;
                     *fb_save->fix = *fb->fix;
 
-                    fb_save->fix->smem_start = (uint64_t) memory::pmm::alloc(fb->fix->smem_len / memory::common::page_size);
+                    fb_save->fix->smem_start = (uint64_t) memory::pmm::alloc(fb->fix->smem_len / memory::page_size);
                 }
 
                 flanterm_write(ft_ctx, "\e[?251", 6);
@@ -72,17 +72,25 @@ ssize_t vt::driver::ioctl(tty::device *tty, size_t req, void *buf) {
         }
 
         case VT_GETMODE: {
-            memcpy(buf, &mode, sizeof(mode));
+            auto not_copied = arch::copy_to_user(buf, &mode, sizeof(mode));
+            if (not_copied) {
+                return -1;
+            }
+
             break;
         }
 
         case VT_SETMODE: {
-            memcpy(&mode, buf, sizeof(mode));
+            auto not_copied = arch::copy_from_user(&mode, buf, sizeof(mode));
+            if (not_copied) {
+                return -1;
+            }
+
             break;
         }
 
         default: {
-            // TODO: errno
+            arch::set_errno(ENOSYS);
             return -1;
         }
     }
@@ -100,14 +108,14 @@ void vt::init(stivale::boot::tags::framebuffer info) {
     driver->fb->fix = frg::construct<fb::fb_fix_screeninfo>(memory::mm::heap);
     driver->fb->var = frg::construct<fb::fb_var_screeninfo>(memory::mm::heap);
 
-    driver->fb->fix->smem_start = (uint64_t) info.addr + memory::common::virtualBase;
+    driver->fb->fix->smem_start = (uint64_t) info.addr + memory::x86::virtualBase;
     driver->fb->fix->line_length = info.pitch;
     driver->fb->var->xres = info.width;
     driver->fb->var->yres = info.height;
 
     driver->ft_ctx = flanterm_fb_init(
         kmalloc, kfree_sz,
-        (uint32_t *) (info.addr + memory::common::virtualBase),
+        (uint32_t *) (info.addr + memory::x86::virtualBase),
         info.width, info.height, info.pitch,
         info.red_mask_size, info.red_mask_shift,
         info.green_mask_size, info.green_mask_shift,

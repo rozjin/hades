@@ -1,13 +1,13 @@
 #ifndef SIG_HPP
 #define SIG_HPP
 
-#include <sys/irq.hpp>
+#include <arch/x86/types.hpp>
 #include <cstddef>
 #include <cstdint>
-#include <sys/sched/regs.hpp>
 #include <sys/sched/wait.hpp>
 #include <sys/sched/time.hpp>
 #include <util/types.hpp>
+#include <arch/types.hpp>
 
 #define SIG_ERR ((void*) -1)
 #define SIG_DFL ((void*) 0)
@@ -63,7 +63,6 @@
 #define SA_RESTART 0x10000000
 #define SA_NODEFER 0x40000000
 #define SA_RESETHAND 0x80000000
-#define SA_RESTORER 0x04000000
 
 #define SIGNAL_MAX 32
 
@@ -83,8 +82,8 @@ namespace sched {
             int si_signo;
             int si_code;
             int si_errno;
-            int64_t si_pid;
-            size_t si_uid;
+            pid_t si_pid;
+            uid_t si_uid;
             void *si_addr;
             int si_status;
             sigval si_value;
@@ -98,55 +97,60 @@ namespace sched {
 
             sigset_t sa_mask;
             int sa_flags;
-            void *sa_restorer;
+            void (*sa_restorer)(void);
         };
 
         struct ucontext {
             uint64_t flags;
             ucontext *prev;
             size_t stack;
-            sched::regs regs;
+            
+            arch::thread_ctx ctx;
+            
             sigset_t signum;
         };
 
         struct signal;
-        struct queue;
+        struct process_ctx;
+        struct thread_ctx;
 
         struct signal {
-            int ref;
             int signum;
-            siginfo *info;
             ipc::trigger *notify_queue;
-            queue *sig_queue;
         };
 
-        struct queue {
+        struct process_ctx {
+            sigset_t sigpending;
+
+            bool active;
+            util::lock lock;
+        };
+
+        struct thread_ctx {
             sigset_t sigmask;
             signal queue[SIGNAL_MAX];
 
             sigset_t sigpending;
             sigset_t sigdelivered;
 
-            bool active;
             ipc::queue *waitq;
-            process *proc;
-            util::lock sig_lock;
+            util::lock lock;
         };
 
-        int do_sigaction(process *proc, int sig, sigaction *act, sigaction *old);
-        void do_sigpending(process *proc, sigset_t *set);
-        int do_sigprocmask(process *proc, int how, sigset_t *set, sigset_t *oldset);
+        int do_sigaction(process *proc, thread *task, int sig, sigaction *act, sigaction *old);
+        void do_sigpending(thread *task, sigset_t *set);
+        int do_sigprocmask(thread *proc, int how, sigset_t *set, sigset_t *oldset);
         int do_kill(pid_t pid, int sig);
         
-        int wait_signal(thread *task, queue *sig_queue, sigset_t sigmask, timespec *time);
+        int wait_signal(thread *task, sigset_t sigmask, timespec *time);
 
         bool send_process(process *sender, process *target, int sig);
         bool send_group(process *sender, process_group *target, int sig);
         bool check_perms(process *sender, process *target);
         bool is_valid(int sig);
-        int process_signals(process *proc, sched::regs *r);
+        int process_signals(process *proc, arch::thread_ctx *ctx);
 
-        bool is_blocked(process *proc, int sig);
+        bool is_blocked(thread *task, int sig);
         bool is_ignored(process *proc, int sig);
     }
 }

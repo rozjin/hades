@@ -5,10 +5,10 @@
 #include <frg/functional.hpp>
 #include <frg/hash_map.hpp>
 #include <mm/mm.hpp>
-#include <sys/irq.hpp>
 #include <sys/pci.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <arch/x86/types.hpp>
 
 namespace e1000 {
     constexpr size_t tx_max = 8;
@@ -139,7 +139,7 @@ namespace e1000 {
     };
 
     void init();
-    void irq_handler(irq::regs *r);
+    void irq_handler(arch::irq_regs *r);
 
     struct device {
         private:
@@ -182,7 +182,7 @@ namespace e1000 {
             frg::hash_map<uint32_t, uint8_t *, frg::hash<uint32_t>, memory::mm::heap_allocator> arp_table;
         public:
             friend void e1000::init();
-            friend void irq_handler(irq::regs *r);
+            friend void irq_handler(arch::irq_regs *r);
 
             bool init();
 
