@@ -37,6 +37,7 @@ sched::thread *sched::create_thread(void (*main)(), uint64_t rsp, vmm::vmm_ctx *
     task->sig_ustack = (size_t) memory::pmm::stack(4);
     task->mem_ctx = ctx;
 
+    task->waitq  = frg::construct<ipc::queue>(memory::mm::heap);
     task->release_waitq = false;
     task->dispatch_signals = false;
 
@@ -109,6 +110,7 @@ sched::thread *sched::fork(thread *original, vmm::vmm_ctx *ctx, arch::irq_regs *
 
     arch::fork_context(original, task, r);
 
+    task->waitq = frg::construct<ipc::queue>(memory::mm::heap);
     task->release_waitq = original->release_waitq;
     task->dispatch_signals = original->dispatch_signals;
 

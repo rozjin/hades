@@ -68,11 +68,13 @@ void arch::route_irq(size_t irq, size_t vector) {
     x86::route_irq(irq, vector);
 }
 
-void arch::install_irq(size_t irq, irq_fn handler) {
-    x86::install_irq(irq, handler);
+size_t arch::install_irq(irq_fn handler) {
+    return x86::install_irq(handler);
 }
 
-x86::irq_fn handlers[224];
+size_t last_handler = 1;
+x86::irq_fn handlers[224] = {};
+
 x86::irq_ptr x86_ptr = {};
 x86::irq_entry x86_entries[256] = { { 0 } };
 
@@ -227,7 +229,14 @@ void x86::set_ist(uint8_t num, uint8_t idx) {
 }
 
 void x86::route_irq(size_t irq, size_t vector) {
-    apic::ioapic::route(0, irq, vector + x86::IRQ0, 0);
+    apic::ioapic::route(apic::lapic::id(), irq, vector + x86::IRQ0, 0);
+}
+
+size_t x86::install_irq(irq_fn handler) {
+    size_t idx = last_handler++;
+    handlers[idx] = handler;
+
+    return idx;
 }
 
 void x86::install_irq(size_t irq, irq_fn handler) {

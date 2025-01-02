@@ -37,8 +37,8 @@ void ipc::queue::set_timer(sched::timespec *time) {
 
     sched::timer *timer = frg::construct<sched::timer>(memory::mm::heap);
     timer->spec = *time;
+    timer->trigger = timer_trigger;
 
-    timer->triggers.push_back(timer_trigger);
     arch::add_timer(timer);
 }
 

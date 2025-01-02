@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <mm/mm.hpp>
 #include <util/string.hpp>
+#include <util/types.hpp>
 
 extern "C" {
     extern void x86_sigreturn_exit(arch::irq_regs *r);
@@ -160,24 +161,28 @@ void syscall_waitpid(arch::irq_regs *r) {
     r->rax = exit_pid;
 }
 
-void syscall_usleep(arch::irq_regs *r) {
-    sched::timespec *req = (sched::timespec *) r->rdi;
-    sched::timespec *rem = (sched::timespec *) r->rsi;
+void syscall_sleep(arch::irq_regs *r) {
+    time_t *secs = (time_t *) r->rdi;
+    long *nanos = (long *) r->rsi;
 
-    auto process = arch::get_process();
-    process->waitq->set_timer(req);
-    for (;;) {
-        auto waker = process->waitq->block(arch::get_thread());
-        if (waker == nullptr) {
-            r->rax = -1;
-            goto finish;
-        }
+    sched::timespec req = {
+        .tv_sec = *secs,
+        .tv_nsec = *nanos
+    };
+
+    auto thread = arch::get_thread();
+    thread->waitq->set_timer(&req);
+
+    auto waker = thread->waitq->block(arch::get_thread());
+    if (waker == nullptr) {
+        r->rax = req.tv_sec;
+        goto finish;
     }
 
-    *rem = *req;
     r->rax = 0;
+    
     finish:
-        process->waitq->timer_trigger->remove(process->waitq);
+        thread->waitq->timer_trigger->remove(thread->waitq);
 }
 
 void syscall_clock_gettime(arch::irq_regs *r) {
@@ -220,6 +225,11 @@ void syscall_getpid(arch::irq_regs *r) {
 }
 
 void syscall_getppid(arch::irq_regs *r) {
+    if (arch::get_process()->parent == nullptr) {
+        r->rax = 0;
+        return;
+    }
+    
     r->rax = arch::get_process()->parent->pid;
 }
 
@@ -447,7 +457,7 @@ void syscall_getcwd(arch::irq_regs *r) {
 
     auto path = vfs::get_absolute(node);
     if (path->size() <= size) {
-        memcpy(buf, path->data(), strlen(path->data()));
+        arch::copy_to_user(buf, path->data(), strlen(path->data()));
     } else {
         frg::destruct(memory::mm::heap, path);
         node->lock.irq_release();

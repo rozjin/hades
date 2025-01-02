@@ -41,11 +41,9 @@
                     "-no-reboot", "-no-shutdown",
 
                     "-machine", "q35",
-                    "-hda", "build/hades.img",
 
-                    "-drive", "id=disk,file.filename=persist.img,if=none,file.locking=off", 
-                    "-device", "ahci,id=ahci",
-                    "-device", "ide-hd,drive=disk,bus=ahci.1"
+                    "-drive", "index=0,media=disk,file=build/hades.img",
+                    "-drive", "index=1,media=disk,file.filename=build/persist.img,file.locking=off"
                 ]
             },
             "dependsOn": ["Build Hades"]
@@ -72,8 +70,8 @@
                     "-no-reboot", "-no-shutdown",
 
                     "-machine", "q35",
-                    "-hda", "build/hades.img",
-                    "-hdb", "hades.qcow2"
+                    "-drive", "index=0,media=disk,file=build/hades.img",
+                    "-drive", "index=1,media=disk,file.filename=build/persist.img,file.locking=off"
                 ]
             },
             "dependsOn": ["Build Hades"]

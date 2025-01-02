@@ -157,8 +157,16 @@ void x86::set_errno(int errno) {
     get_locals()->errno = errno;
 }
 
+int x86::get_errno() {
+    return get_locals()->errno;
+}
+
 void arch::set_errno(int errno) {
     x86::set_errno(errno);
+}
+
+int arch::get_errno() {
+    return x86::get_errno();
 }
 
 sched::process *arch::get_process() {

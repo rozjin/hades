@@ -46,8 +46,8 @@ namespace arch {
     void stall_cpu();
     bool get_irq_state();
 
+    size_t install_irq(irq_fn handler);
     void route_irq(size_t irq, size_t vector);
-    void install_irq(size_t irq, irq_fn handler);
 
     void init_context(sched::thread *task, void (*main)(), uint64_t rsp, uint8_t privilege);
     void fork_context(sched::thread *original, sched::thread *task, irq_regs *r);
@@ -66,6 +66,7 @@ namespace arch {
     void init_sched();
     void tick();
     void init_smp();
+    void start_bsp();
 
     void stop_thread(sched::thread *task);
     void stop_all_cpus();
@@ -84,6 +85,7 @@ namespace arch {
     uint64_t get_cpu();
 
     void set_errno(int errno);
+    int get_errno();
 
     namespace loader {
         bool load_elf(const char *path, vfs::fd *fd, sched::process_env *env);
@@ -94,8 +96,8 @@ namespace arch {
         void load_params(char **argv, char** envp, sched::process_env *env);
     }
 
-    void init_timer();
     void add_timer(sched::timer *timer);
+    void tick_clock(long nanos);
 };
 
 #endif

@@ -12,6 +12,7 @@ main_sources = files(
     'source/cxx/arch/x86/signal.cpp',
     'source/cxx/arch/x86/smp.cpp',
     'source/cxx/arch/x86/syscall.cpp',
+    'source/cxx/arch/x86/time.cpp',
 
     'source/cxx/arch/x86/copy.cpp',
     'source/cxx/arch/x86/exception.cpp',
@@ -136,15 +137,16 @@ custom_target(
 	'hades',
 	depends: make_elf,
 	input: make_elf,
-	output: 'hades.img',
+	output: ['hades.img', 'persist.img'],
 	command: [script_path,
 		meson.project_name(), 
 		'-k', make_elf,
 		
 		'-s', join_paths(meson.project_source_root(), 'source'),
-        '-r', join_paths(meson.project_source_root(), 'sys'),
+        '-r', join_paths(meson.project_source_root(), 'user/hbuild'),
 
 		'-b', meson.project_build_root(),
 	],
-	build_by_default: true
+	build_by_default: true,
+    build_always_stale: true
 )

@@ -178,7 +178,10 @@ void e1000::device::rx_handle() {
         net::eth *eth_hdr = (net::eth *) buf;
         switch(net::ntohs(eth_hdr->type)) {
             case 0x0806:
-                arp_handle(((char *) eth_hdr) + sizeof(net::eth), len - sizeof(net::eth));
+                arp_handle(((char *) eth_hdr) + sizeof(net::eth));
+                break;
+            default:
+                kmsg(netlog, "Unknown packet type receive");
                 break;
         }
 
@@ -216,14 +219,10 @@ void e1000::device::arp_send(net::mac dest_mac, uint32_t dest_ip) {
     memcpy(arp_pkt->dest_addr, dest_mac, net::eth_alen);
     arp_pkt->dest_ip = dest_ip;
 
-    send(eth_pkt, eth_pkt_len);    
+    send(eth_pkt, eth_pkt_len);
 }
 
-void e1000::device::arp_handle(void *pkt, size_t len) {
-    if (len != 28) {
-        return;
-    }
-
+void e1000::device::arp_handle(void *pkt) {
     net::pkt::arp_eth_ipv4 *arp_pkt = (net::pkt::arp_eth_ipv4 *) pkt;
 
     uint16_t host_type = net::ntohs(arp_pkt->host_type);
@@ -412,8 +411,8 @@ void e1000::init() {
         return;
     }
 
-    arch::route_irq(irq_resource.base, 3);
-    arch::install_irq(3, e1000::irq_handler);
+    size_t vector = arch::install_irq(e1000::irq_handler);
+    arch::route_irq(irq_resource.base, vector);
 
     net_dev->init();
     kmsg(logger, "device initialized");

@@ -4,21 +4,21 @@
 #include <frg/vector.hpp>
 #include <mm/mm.hpp>
 #include <cstddef>
-#include <cstdint>
+#include <util/types.hpp>
 
 namespace ipc {
     struct trigger;
 };
 
 namespace sched {    
-    constexpr long TIMER_HZ = 1000000000;
+    constexpr size_t TIMER_HZ = 1000000000;
 
     constexpr size_t CLOCK_REALTIME = 0;
     constexpr size_t CLOCK_MONOTONIC = 1;
 
     struct timespec {
         public:
-            int64_t tv_sec;
+            time_t tv_sec;
             long tv_nsec;
 
             timespec operator+(timespec const& other) {
@@ -54,16 +54,23 @@ namespace sched {
                 return res;                    
             }
 
-            timespec ms(int ms);
+            timespec ms(int ms) {
+                return {
+                    .tv_sec = ms / 1000,
+                    .tv_nsec = (ms % 1000) * 100000
+                };
+            }
     };
 
     struct timer {
         timespec spec;
-        frg::vector<ipc::trigger *, memory::mm::heap_allocator> triggers;
+        ipc::trigger *trigger;
     };
 
-    inline timespec clock_rt{};
-    inline timespec clock_mono{};
+    extern timespec clock_rt;
+    extern timespec clock_mono;
+
+    extern frg::vector<sched::timer *, memory::mm::heap_allocator> timers;
 }
 
 #endif

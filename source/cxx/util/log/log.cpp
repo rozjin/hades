@@ -176,6 +176,23 @@ void kmsg(log::subsystem subsystem, const char *fmt, ...) {
     log_lock.irq_release();
 }
 
+static log::subsystem debug_logger = log::make_subsystem("DEBUG");
+void debug(const char *fmt, ...) {
+    log_lock.irq_acquire();
+
+    write_subsystem(debug_logger, log::level::INFO);
+
+    va_list args;
+    va_start(args, fmt);
+
+    write_msg(fmt, args);
+
+    write_log('\n');
+    va_end(args);
+
+    log_lock.irq_release();
+}
+
 void panic(const char *fmt, ...) {
     arch::irq_off();
     arch::stop_all_cpus();

@@ -7,7 +7,7 @@
 
 static log::subsystem logger = log::make_subsystem("EXT2");
 
-void vfs::ext2fs::init_fs(node *source, node *root) {
+void vfs::ext2fs::init_fs(node *root, node *source) {
     filesystem::init_fs(root, source);
 
     this->superblock = (ext2fs::super *) kmalloc(sizeof(ext2fs::super));
@@ -29,12 +29,7 @@ void vfs::ext2fs::init_fs(node *source, node *root) {
     bgd_count = util::ceil(superblock->block_count, superblock->blocks_per_group);
 
     kmsg(logger, 
-        "ext2fs detected:"\
-            "inode count: %u"\
-            "block count: %u"\
-            "blocks per group: %u"\
-            "block size: %u"\
-            "bgd count: %u",
+        "ext2fs: inode count: %u, block count: %u, blocks per group: %u, block size: %u, bgd count: %u",
             
             superblock->inode_count,
             superblock->block_count,
@@ -50,7 +45,11 @@ void vfs::ext2fs::init_fs(node *source, node *root) {
     }
 
     root->inum = 2;
-    root->meta->st_ino = 2; 
+    root->meta->st_ino = 2;
+
+    ext2fs::inode root_inode;
+    read_inode_entry(&root_inode, root->inum);
+    read_dirents(&root_inode, (ext2fs::ext2_private **) (&root->private_data));
 }
 
 vfs::node *vfs::ext2fs::lookup(node *parent, frg::string_view name) {
@@ -74,7 +73,7 @@ vfs::node *vfs::ext2fs::lookup(node *parent, frg::string_view name) {
             return nullptr;
         }
 
-        if (strcmp(file->name, name.data()) != 0) {
+        if (strncmp(file->name, name.data(), util::max(file->dent->name_length, name.size()))!= 0) {
             file = file->next;
             continue;
         }
@@ -111,7 +110,7 @@ vfs::node *vfs::ext2fs::lookup(node *parent, frg::string_view name) {
         auto meta = frg::construct<vfs::node::statinfo>(memory::mm::heap);
 
         node->meta = meta;
-        node->private_data = (void *) file;
+        node->private_data = nullptr;
 
         meta->st_uid = inode.uid;
         meta->st_gid = inode.gid;

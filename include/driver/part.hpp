@@ -35,7 +35,7 @@ namespace part {
             uint64_t usable_end;
 
             char guid[16];
-            uint32_t part_start;
+            uint64_t part_start;
             uint32_t part_len;
             uint32_t part_size;
             uint32_t part_checksum;

@@ -138,7 +138,9 @@ namespace x86 {
     using irq_fn = void(*)(arch::irq_regs *r);
 
     void route_irq(size_t irq, size_t vector);
+
     void install_irq(size_t irq, irq_fn handler);
+    size_t install_irq(irq_fn handler);
 
     void set_gate(uint8_t num, uint64_t base, uint8_t flags);
     void set_ist(uint8_t num, uint8_t idx);

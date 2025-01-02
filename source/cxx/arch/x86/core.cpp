@@ -39,8 +39,8 @@ void io::wait() {
 }
 
 void arch::init_features() {
-    hpet::init();
     apic::init();
+    hpet::init();
 }
 
 arch::irq_regs arch::sched_to_irq(sched_regs *regs) {

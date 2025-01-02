@@ -176,7 +176,7 @@ namespace e1000 {
             void rx_handle();
 
             void arp_send(net::mac dest_mac, uint32_t dest_ip);
-            void arp_handle(void *pkt, size_t len);
+            void arp_handle(void *pkt);
             void arp_probe();
 
             frg::hash_map<uint32_t, uint8_t *, frg::hash<uint32_t>, memory::mm::heap_allocator> arp_table;

@@ -122,6 +122,11 @@ void syscall_openat(arch::irq_regs *r) {
     }
 
     auto fd = vfs::open(dir, path, process->fds, flags, mode);
+    if (fd == nullptr) {
+        r->rax = -1;
+        return;
+    }
+
     r->rax = fd->fd_number;
 }
 
@@ -167,11 +172,9 @@ void syscall_dup2(arch::irq_regs *r) {
 
     auto process = arch::get_process();
 
-    process->fds->lock.irq_acquire();
     auto oldfd = process->fds->fd_list[oldfd_num];
     if (oldfd == nullptr) {
         arch::set_errno(EBADF);
-        process->fds->lock.irq_release();
         r->rax = -1;
         return;
     }
@@ -179,7 +182,6 @@ void syscall_dup2(arch::irq_regs *r) {
     oldfd->lock.irq_acquire();
     auto newfd = vfs::dup(oldfd, false, newfd_num);
     oldfd->lock.irq_release();
-    process->fds->lock.irq_release();
 
     r->rax = newfd->fd_number;
 }
@@ -298,7 +300,7 @@ void syscall_ioctl(arch::irq_regs *r) {
     process->fds->lock.irq_release();
 }
 
-void syscall_lstatat(arch::irq_regs *r) {
+void syscall_statat(arch::irq_regs *r) {
     int dirfd = r->rdi;
     const char *path = (const char *) r->rsi;
     void *buf = (void *) r->rdx;
@@ -331,9 +333,7 @@ void syscall_lstatat(arch::irq_regs *r) {
         }
     }
 
-    auto out_stat = (vfs::node::statinfo *) buf;
-    *out_stat = *node->meta;
-
+    arch::copy_to_user(buf, node->meta, sizeof(vfs::node::statinfo));
     r->rax = 0;
 }
 
@@ -516,7 +516,7 @@ void syscall_readdir(arch::irq_regs *r) {
     if (fd == nullptr || fd->desc->node == nullptr || fd->desc->node->type != vfs::node::type::DIRECTORY) {
         arch::set_errno(EBADF);
         process->fds->lock.irq_release();
-        r->rax = -1;
+        r->rax = 1;
         return;
     }
 

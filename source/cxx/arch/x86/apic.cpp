@@ -8,6 +8,7 @@
 #include <util/io.hpp>
 #include <util/log/log.hpp>
 #include <util/log/panic.hpp>
+#include <util/misc.hpp>
 
 namespace apic {
     namespace ioapic {
@@ -53,11 +54,9 @@ namespace apic {
                     continue;
                 }
 
-                if (iso->flags & 2) {
+                if (iso->flags & (1 << 1)) {
                     flags |= IOAPIC_REDIR_POLARITY;
-                }
-
-                if (iso->flags & 8) {
+                } else if (iso->flags & (1 << 3)) {
                     flags |= IOAPIC_REDIR_TRIGGER_MODE;
                 }
 
@@ -83,20 +82,17 @@ namespace apic {
 
         void setup() {
             uint8_t base_vector = 32;
+            uint64_t irq_bits = 0;
             for (size_t i = 0; i < 16; i++) {
-                route(0, i, i + base_vector, true);
+                if (!util::bit_test((uint8_t *) &irq_bits, i)) {
+                    uint8_t irq = route(0, i, i + base_vector, true);
+                    util::bit_set((uint8_t *) &irq_bits, irq);
+                }
             }
         };
     };
 
     void remap() {
-        uint8_t master_mask = io::readb(0x21);
-        uint8_t slave_mask  = io::readb(0xA1);
-
-        if (master_mask == 0xFF && slave_mask == 0xFF) {
-            return;
-        }
-
         io::writeb(0x20, 0x11);
         io::wait();
         io::writeb(0xA0, 0x11);
@@ -104,22 +100,22 @@ namespace apic {
 
         io::writeb(0x21, 0x20);
         io::wait();
-        io::writeb(0xA1, 0x40);
+        io::writeb(0xA1, 0x28);
         io::wait();
 
-        io::writeb(0x21, 4);
+        io::writeb(0x21, 0x4);
         io::wait();
-        io::writeb(0xA1, 2);
-        io::wait();
-
-        io::writeb(0x21, 1);
-        io::wait();
-        io::writeb(0xA1, 1);
+        io::writeb(0xA1, 0x2);
         io::wait();
 
-        io::writeb(0x21, master_mask);
+        io::writeb(0x21, 0x1);
         io::wait();
-        io::writeb(0xA1, slave_mask);
+        io::writeb(0xA1, 0x1);
+        io::wait();
+
+        io::writeb(0x21, 0);
+        io::wait();
+        io::writeb(0xA1, 0);
         io::wait();
         io::writeb(0xA1, 0xFF);
         io::writeb(0x21, 0xFF);
@@ -184,7 +180,9 @@ namespace apic {
 
     void init() {
         remap();
-        lapic::setup();
         ioapic::setup();
+        lapic::setup();
+
+        asm volatile("mov %0, %%cr8" :: "r"(0ULL));
     }
 };

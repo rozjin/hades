@@ -57,7 +57,7 @@ bool new_line(tty::termios termios, char c) {
 		}
 	}
 
-	return true;    
+	return true;
 }
 
 ssize_t tty::device::read_canon(void *buf, size_t len) {
@@ -84,12 +84,12 @@ ssize_t tty::device::read_canon(void *buf, size_t len) {
 
             canon_lock.irq_release();
 
-            auto not_copied = arch::copy_to_user(buf, chars, count);
-            if (not_copied) {
+            auto copied = arch::copy_to_user(buf, chars, count);
+            if (copied < count) {
                 kfree(chars);
-                return count - not_copied;
+                return count - copied;
             }
-            
+
             kfree(chars);
             return count;
         }
@@ -134,7 +134,7 @@ ssize_t tty::device::read_canon(void *buf, size_t len) {
                     in_lock.irq_release();
                     goto acquire_chars;
                 }
-                
+
                 if ((termios.c_lflag & ECHOE) && (c == termios.c_cc[VERASE])) {
                     // Print a backspace and ignore the char
                     if (items) {
@@ -194,10 +194,10 @@ ssize_t tty::device::read_raw(void *buf, size_t len) {
             driver->flush(this);
         in_lock.irq_release();
 
-        auto not_copied = arch::copy_to_user(buf, chars, count);
-        if (not_copied) {
+        auto copied = arch::copy_to_user(buf, chars, count);
+        if (copied < count) {
             kfree(chars);
-            return count - not_copied;
+            return count - copied;
         }
 
         kfree(chars);
@@ -208,7 +208,7 @@ ssize_t tty::device::read_raw(void *buf, size_t len) {
         while (__atomic_load_n(&in.items, __ATOMIC_RELAXED) < min) {
             if (arch::get_process() && arch::get_thread()->sig_ctx.sigpending) {
                 arch::set_errno(EINTR);
-            
+
                 kfree(chars);
                 return -1;
             }
@@ -231,10 +231,10 @@ ssize_t tty::device::read_raw(void *buf, size_t len) {
             driver->flush(this);
         in_lock.irq_release();
 
-        auto not_copied = arch::copy_to_user(buf, chars, count);
-        if (not_copied) {
+        auto copied = arch::copy_to_user(buf, chars, count);
+        if (copied < count) {
             kfree(chars);
-            return count - not_copied;
+            return count - copied;
         }
 
         kfree(chars);

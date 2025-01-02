@@ -436,11 +436,11 @@ void ahci::init() {
             case DEV_PM:
             case DEV_SEMB:
             case DEV_ATAPI:
-                kmsg(logger, "Found Unsupported AHCI device with port id ", i);
+                kmsg(logger, "Found Unsupported AHCI device with port id  %d", i);
                 break;
             case DEV_ATA: {
                 found_devices = true;
-                kmsg(logger, "Found SATA device with port id ", i);
+                kmsg(logger, "Found SATA device with port id %d", i);
 
                 auto device = frg::construct<ahci::device>(memory::mm::heap);
                 device->is_blockdev = true;

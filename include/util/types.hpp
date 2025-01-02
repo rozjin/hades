@@ -4,15 +4,15 @@
 #include <cstddef>
 #include <cstdint>
 
-using pid_t = int64_t;
-using tid_t = int64_t;
-using uid_t = int32_t;
+using pid_t = int;
+using tid_t = int;
+using uid_t = uint32_t;
 using gid_t = int32_t;
 
-using ino_t = size_t;
-using mode_t = int64_t;
-using clockid_t = int64_t;
-using time_t = int64_t;
+using ino_t = uint64_t;
+using mode_t = int32_t;
+using clockid_t = uint64_t;
+using time_t = long;
 
 using sigset_t = uint64_t;
 using ssize_t = int64_t;
@@ -33,6 +33,9 @@ constexpr int O_NOCTTY = 0x000080;
 
 constexpr int AT_FDCWD = -100;
 constexpr int AT_EMPTY_PATH = 1;
+
+constexpr int AT_SYMLINK_FOLLOW = 2;
+constexpr int AT_SYMLINK_NOFOLLOW = 4;
 
 constexpr int SEEK_SET = 1;
 constexpr int SEEK_CUR = 2;
@@ -60,9 +63,9 @@ constexpr size_t DT_LNK = 10;
 constexpr size_t DT_SOCK = 12;
 constexpr size_t DT_WHT = 14;
 
-struct dirent {
-    size_t d_ino;
-    size_t d_off;
+struct [[gnu::packed]] dirent {
+    ino_t d_ino;
+    off_t d_off;
     uint16_t d_reclen;
     uint8_t d_type;
     char d_name[1024];

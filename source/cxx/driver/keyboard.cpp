@@ -219,8 +219,8 @@ void kb::init() {
     disable();
     flush();
 
-    arch::route_irq(2, 2);
-    arch::install_irq(2, ps2_handler);
+    size_t vector = arch::install_irq(ps2_handler);
+    arch::route_irq(2, vector);
 
     enable();
 }

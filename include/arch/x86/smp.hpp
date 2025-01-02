@@ -89,6 +89,7 @@ namespace x86 {
     uint64_t get_cpu();
 
     void set_errno(int errno);
+    int get_errno();
 
     void init_smp();
     void stop_all_cpus();

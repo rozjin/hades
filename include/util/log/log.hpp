@@ -62,4 +62,6 @@ struct log {
 void kmsg(log::subsystem subsystem, log::level level, const char *fmt, ...);
 void kmsg(log::subsystem subsystem, const char *fmt, ...);
 
+void debug(const char *fmt, ...);
+
 #endif

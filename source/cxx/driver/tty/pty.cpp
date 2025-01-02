@@ -85,10 +85,10 @@ ssize_t tty::ptm::read(void *buf, size_t len, size_t offset) {
 
     in_lock.irq_release();
 
-    auto not_copied = arch::copy_to_user(buf, chars, count);
-    if (not_copied) {
+    auto copied = arch::copy_to_user(buf, chars, count);
+    if (copied < count) {
         kfree(chars);
-        return count - not_copied;
+        return count - copied;
     }
 
     kfree(chars);
@@ -98,10 +98,11 @@ ssize_t tty::ptm::read(void *buf, size_t len, size_t offset) {
 ssize_t tty::ptm::write(void *buf, size_t len, size_t offset) {
     size_t count;
     char *chars = (char *) kmalloc(len);
-    auto not_copied = arch::copy_from_user(chars, buf, len);
-    if (not_copied) {
+
+    auto copied = arch::copy_from_user(chars, buf, len);
+    if (copied < len) {
         kfree(chars);
-        return len - not_copied;
+        return len - copied;
     }
 
     slave->tty->in_lock.irq_acquire();
@@ -131,8 +132,8 @@ ssize_t tty::ptm::ioctl(size_t req, void *buf) {
         }
 
         case TIOCGWINSZ: {
-            auto not_copied = arch::copy_to_user(buf, &pts->size, sizeof(winsize));
-            if (not_copied) {
+            auto copied = arch::copy_to_user(buf, &pts->size, sizeof(winsize));
+            if (copied < sizeof(winsize)) {
                 return -1;
             }
 
@@ -140,8 +141,8 @@ ssize_t tty::ptm::ioctl(size_t req, void *buf) {
         }
 
         case TIOCSWINSZ: {
-            auto not_copied = arch::copy_from_user(&pts->size, buf, sizeof(winsize));
-            if (not_copied) {
+            auto copied = arch::copy_from_user(&pts->size, buf, sizeof(winsize));
+            if (copied < sizeof(winsize)) {
                 return -1;
             }
 
@@ -158,8 +159,8 @@ ssize_t tty::ptm::ioctl(size_t req, void *buf) {
 ssize_t tty::pts::ioctl(device *tty, size_t req, void *buf) {
     switch (req) {
         case TIOCGWINSZ: {
-            auto not_copied = arch::copy_to_user(buf, &size, sizeof(winsize));
-            if (not_copied) {
+            auto copied = arch::copy_to_user(buf, &size, sizeof(winsize));
+            if (copied < sizeof(winsize)) {
                 return -1;
             }
 
@@ -167,8 +168,8 @@ ssize_t tty::pts::ioctl(device *tty, size_t req, void *buf) {
         }
 
         case TIOCSWINSZ: {
-            auto not_copied = arch::copy_from_user(&size, buf, sizeof(winsize));
-            if (not_copied) {
+            auto copied = arch::copy_from_user(&size, buf, sizeof(winsize));
+            if (copied < sizeof(winsize)) {
                 return -1;
             }
             

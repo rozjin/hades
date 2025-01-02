@@ -1,4 +1,4 @@
-#include "arch/types.hpp"
+#include <arch/types.hpp>
 #include <cstddef>
 #include <sys/sched/signal.hpp>
 #include <driver/tty/termios.hpp>
@@ -11,7 +11,7 @@
 tty::device *tty::active_tty = nullptr;
 void tty::self::init() {
     auto self = frg::construct<tty::self>(memory::mm::heap);
-    vfs::devfs::add("/dev/tty", self);
+    vfs::devfs::add("tty", self);
 }
 
 ssize_t tty::self::on_open(vfs::fd *fd, ssize_t flags) {
@@ -113,12 +113,14 @@ ssize_t tty::device::write(void *buf, size_t count, size_t offset) {
     out_lock.irq_acquire();
 
     char *chars = (char *) kmalloc(count);
-    auto not_copied = arch::copy_from_user(chars, buf, count);
-    if (not_copied) {
+    auto copied = arch::copy_from_user(chars, buf, count);
+    if (copied < count) {
         kfree(chars);
         out_lock.irq_release();
-        return count - not_copied;
+        return count - copied;
     }
+
+    debug("Writing %s", chars);
 
     size_t bytes = 0;
     for (bytes = 0; bytes < count; bytes++) {
@@ -258,7 +260,8 @@ void tty::set_active(frg::string_view path, vfs::fd_table *table) {
     auto fd = vfs::open(nullptr, path, table, O_NOCTTY, O_RDONLY);
     if (fd == nullptr) return;
 
-    tty::device *tty = (tty::device *) fd->desc->node->private_data; 
+    vfs::devfs::dev_priv *private_data = (vfs::devfs::dev_priv *) fd->desc->node->private_data; 
+    tty::device *tty = (tty::device *) private_data->dev;
     vfs::close(fd);
 
     if (tty) {

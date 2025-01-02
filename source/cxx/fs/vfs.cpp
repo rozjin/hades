@@ -2,6 +2,7 @@
 #include "mm/common.hpp"
 #include <sys/sched/sched.hpp>
 #include "util/lock.hpp"
+#include "util/types.hpp"
 #include <cstdint>
 #include <frg/allocation.hpp>
 #include <mm/mm.hpp>
@@ -138,7 +139,7 @@ vfs::filesystem *vfs::resolve_fs(frg::string_view path, node *base, size_t& syml
     }
 }
 
-vfs::node *vfs::resolve_at(frg::string_view path, node *base, size_t& symlinks_traversed) {
+vfs::node *vfs::resolve_at(frg::string_view path, node *base, bool follow_symlink, size_t& symlinks_traversed) {
     if (path == '/' && base == nullptr) {
         return tree_root;
     }
@@ -222,6 +223,10 @@ vfs::node *vfs::resolve_at(frg::string_view path, node *base, size_t& symlinks_t
         case node::type::DIRECTORY:
             return next;
         case node::type::SYMLINK: {
+            if (!follow_symlink) {
+                return next;
+            }
+
             if (!next->meta || next->meta->st_size == 0) {
                 return nullptr;
             }
@@ -585,7 +590,7 @@ vfs::fd *vfs::dup(vfs::fd *fd, bool cloexec, ssize_t new_num) {
 
     fd->desc->ref++;
     auto new_fd = fd->table->fd_list[new_num];
-    if (new_num >= 0) {
+    if (new_num >= 0 && new_fd) {
         close(new_fd);
     }
 
@@ -609,14 +614,13 @@ vfs::fd *vfs::dup(vfs::fd *fd, bool cloexec, ssize_t new_num) {
     return new_fd;
 }
 
-ssize_t vfs::lstat(node *dir, frg::string_view filepath, node::statinfo *buf) {
-    auto node = resolve_at(filepath, dir);
+ssize_t vfs::stat(node *dir, frg::string_view filepath, node::statinfo *buf, int64_t flags) {
+    auto node = resolve_at(filepath, dir, !(flags & AT_SYMLINK_NOFOLLOW));
     if (!node) {
         return -ENOENT;
     }
 
     memcpy(buf, node->stat(), sizeof(node::statinfo));
-
     return 0;
 }
 

@@ -78,7 +78,7 @@ static void run_init() {
     proc->sess = session;
 
     char *argv[] = { (char *)
-        "/bin/init", 
+        "/usr/bin/bash", 
         NULL 
     };
     char *envp[] = { 
@@ -88,16 +88,33 @@ static void run_init() {
         (char *) "FBDEV=/dev/fb0", 
         NULL 
     };
-    proc->cwd = vfs::resolve_at("/bin", nullptr);
+    proc->cwd = vfs::tree_root;
 
-    auto fd = vfs::open(nullptr, "/bin/init", proc->fds, 0, O_RDWR);
+    auto fd = vfs::open(nullptr, "/usr/bin/bash", proc->fds, 0, O_RDWR);
     proc->mem_ctx->swap_in();
     
-    proc->env.load_elf("/bin/init", fd);
+    proc->env.load_elf("/usr/bin/bash", fd);
     proc->env.set_entry();
 
     proc->env.load_params(argv, envp);
     proc->env.place_params(argv, envp, proc->main_thread);
+
+    auto stdin = vfs::open(nullptr, "/dev/tty0", proc->fds, 0, O_RDONLY);
+    auto stdout = vfs::open(nullptr, "/dev/tty0", proc->fds, 0, O_RDWR);
+    auto stderr = vfs::open(nullptr, "/dev/tty0", proc->fds, 0, O_RDWR);
+
+    auto stdin_fd = vfs::dup(stdin, false, 0);
+    auto stdout_fd = vfs::dup(stdout, false, 1);
+    auto stderr_fd = vfs::dup(stderr, false, 2);
+
+    vfs::close(stdin);
+    vfs::close(stdout);
+    vfs::close(stderr);
+
+    vfs::devfs::dev_priv *private_data = (vfs::devfs::dev_priv *) stdin_fd->desc->node->private_data;
+    tty::device *tty = (tty::device *) private_data->dev;
+
+    session->tty = tty;
 
     kmsg(logger, "Trying to run init process, at: %lx", proc->env.entry);
     proc->start();
@@ -107,7 +124,7 @@ static void show_splash(vfs::fd_table *table) {
     auto splash_fd = vfs::open(nullptr, "/home/racemus/hades.bmp", table, 0, O_RDONLY);
 
     auto info = frg::construct<vfs::node::statinfo>(memory::mm::heap);
-    vfs::lstat(nullptr, "/home/racemus/hades.bmp", info);
+    vfs::stat(nullptr, "/home/racemus/hades.bmp", info, 0);
      
     auto buffer = kmalloc(info->st_size);
     vfs::read(splash_fd, buffer, info->st_size);
@@ -156,7 +173,6 @@ extern "C" {
         kmsg(logger, "Booted by ", header->brand, " version ", header->version);
 
         acpi::init(stivale::parser.rsdp());
-
         arch::init_irqs();
 
         memory::pmm::init(stivale::parser.mmap());
@@ -168,7 +184,7 @@ extern "C" {
         arch::init_smp();
 
         pci::init();
-        arch::init_timer();
+        arch::start_bsp();
 
         auto kern_thread = sched::create_thread(kern_task, (uint64_t) memory::pmm::stack(4), vmm::boot, 0);
         kern_thread->start();

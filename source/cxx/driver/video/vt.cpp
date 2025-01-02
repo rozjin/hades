@@ -72,8 +72,8 @@ ssize_t vt::driver::ioctl(tty::device *tty, size_t req, void *buf) {
         }
 
         case VT_GETMODE: {
-            auto not_copied = arch::copy_to_user(buf, &mode, sizeof(mode));
-            if (not_copied) {
+            auto copied = arch::copy_to_user(buf, &mode, sizeof(mode));
+            if (copied < sizeof(mode)) {
                 return -1;
             }
 
@@ -81,8 +81,8 @@ ssize_t vt::driver::ioctl(tty::device *tty, size_t req, void *buf) {
         }
 
         case VT_SETMODE: {
-            auto not_copied = arch::copy_from_user(&mode, buf, sizeof(mode));
-            if (not_copied) {
+            auto copied = arch::copy_from_user(&mode, buf, sizeof(mode));
+            if (copied < sizeof(mode)) {
                 return -1;
             }
 

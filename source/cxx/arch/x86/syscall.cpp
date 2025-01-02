@@ -14,7 +14,7 @@ extern void syscall_close(arch::irq_regs *);
 extern void syscall_read(arch::irq_regs *);
 extern void syscall_write(arch::irq_regs *);
 extern void syscall_ioctl(arch::irq_regs *);
-extern void syscall_lstatat(arch::irq_regs *);
+extern void syscall_statat(arch::irq_regs *);
 extern void syscall_mkdirat(arch::irq_regs *);
 extern void syscall_renameat(arch::irq_regs *);
 extern void syscall_linkat(arch::irq_regs *);
@@ -30,7 +30,7 @@ extern void syscall_fork(arch::irq_regs *);
 extern void syscall_exit(arch::irq_regs *);
 extern void syscall_futex(arch::irq_regs *r);
 extern void syscall_waitpid(arch::irq_regs *);
-extern void syscall_usleep(arch::irq_regs *);
+extern void syscall_sleep(arch::irq_regs *);
 extern void syscall_clock_gettime(arch::irq_regs *);
 extern void syscall_clock_get(arch::irq_regs *);
 extern void syscall_getpid(arch::irq_regs *);
@@ -100,7 +100,7 @@ static x86::syscall_handler syscalls_list[] = {
     syscall_getppid,
     
     syscall_fcntl,
-    syscall_lstatat,
+    syscall_statat,
     syscall_ioctl,
     syscall_fork,
     syscall_exec,
@@ -141,12 +141,12 @@ static x86::syscall_handler syscalls_list[] = {
     syscall_renameat,
     // TODO: symlinkat, readlinkat
     syscall_mkdirat,
-    syscall_usleep,
+    syscall_sleep,
     syscall_clock_gettime,
     syscall_clock_get,
     syscall_linkat,
 
-    syscall_user_log
+    syscall_user_log,
 };
 
 extern "C" {

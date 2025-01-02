@@ -25,8 +25,6 @@ namespace tty {
 namespace sched {
     inline volatile size_t uptime;
 
-    constexpr size_t PIT_FREQ = 1000;
-
     constexpr size_t WNOHANG = 1;
     constexpr size_t WUNTRACED = 2;
     constexpr size_t WSTOPPED = 2;
@@ -131,6 +129,7 @@ namespace sched {
                 DEAD,
             };
 
+            ipc::queue *waitq;
             bool release_waitq;
             bool dispatch_signals;
 

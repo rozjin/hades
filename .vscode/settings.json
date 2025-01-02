@@ -1,8 +1,7 @@
 {
-    "C_Cpp.default.compileCommands": "/home/racemus/projects/hades/builddir/compile_commands.json",
+    "C_Cpp.default.compileCommands": "${workspaceFolder}/compile_commands.json",
     "r.lsp.promptToInstall": false,
     "C_Cpp.default.configurationProvider": "mesonbuild.mesonbuild",
-    "makefile.configureOnOpen": true,
     "files.associations": {
         "*.pk": "yaml",
         "*.rmd": "markdown",

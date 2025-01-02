@@ -291,7 +291,7 @@ namespace vfs {
 
     static size_t zero = 0;
     filesystem *resolve_fs(frg::string_view path, node *base, size_t& symlinks_traversed = zero);
-    node *resolve_at(frg::string_view path, node *base, size_t& symlinks_traversed = zero);
+    node *resolve_at(frg::string_view path, node *base, bool follow_symlink = false, size_t& symlinks_traversed = zero);
     path *get_absolute(node *node);
     node *get_parent(node *dir, frg::string_view path);
 
@@ -307,7 +307,7 @@ namespace vfs {
     ssize_t write(vfs::fd *fd, void *buf, size_t len);
     ssize_t ioctl(vfs::fd *fd, size_t req, void *buf);
     void *mmap(vfs::fd *fd, void *addr, off_t off, size_t len);
-    ssize_t lstat(node *dir, frg::string_view filepath, node::statinfo *buf);
+    ssize_t stat(node *dir, frg::string_view filepath, node::statinfo *buf, int64_t flags);
     ssize_t create(node *dir, frg::string_view filepath, fd_table *table, int64_t type, int64_t flags, int64_t mode);
     ssize_t mkdir(node *dir, frg::string_view dirpath, int64_t flags, int64_t mode);
     ssize_t rename(node *old_dir, frg::string_view oldpath, node *new_dir, frg::string_view newpath, int64_t flags);
