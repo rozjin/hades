@@ -1,8 +1,11 @@
 #ifndef TTY_HPP
 #define TTY_HPP
 
+#include "driver/keyboard.hpp"
 #include "driver/tty/termios.hpp"
 #include "fs/vfs.hpp"
+#include "mm/mm.hpp"
+#include "sys/sched/wait.hpp"
 #include "util/lock.hpp"
 #include "util/ring.hpp"
 #include <cstddef>
@@ -28,8 +31,6 @@ namespace tty {
 
     #define TIOCGPTN 0x80045430
     #define TIOCSPTLCK 0x40045431
-
-    constexpr size_t SET_ACTIVE = 0xFEE;
 
     constexpr size_t max_chars = 8192;
     constexpr size_t max_canon_lines = 256;
@@ -68,11 +69,15 @@ namespace tty {
             sched::session *sess;
             sched::process_group *fg;
             tty::termios termios;
+
+            ipc::trigger *kbd_trigger;
         public:
             friend struct ptmx;
             friend struct pts;
             friend void echo_char(device *tty, char c);
             friend void vt::init(stivale::boot::tags::framebuffer info);
+            friend void sched::process::kill(int exit_code);
+            friend void kb::irq_handler(arch::irq_regs *r);
 
             // TODO: change visibility
 
@@ -102,10 +107,13 @@ namespace tty {
 
                 termios.c_cc[VTIME] = 0;
                 termios.c_cc[VMIN] = 1;
+
+                kbd_trigger = frg::construct<ipc::trigger>(memory::mm::heap);
             };
 
             void handle_signal(char c);
 
+            int wait_for_kbd(util::ring<char> *queue, char *chars, bool check_min = false, int min = 0);
             ssize_t read_canon(void* buf, size_t len);
             ssize_t read_raw(void *buf, size_t len);
 

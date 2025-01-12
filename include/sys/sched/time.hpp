@@ -11,7 +11,7 @@ namespace ipc {
 };
 
 namespace sched {    
-    constexpr size_t TIMER_HZ = 1000000000;
+    constexpr long NANOS_PER_MILLI = 1000000000;
 
     constexpr size_t CLOCK_REALTIME = 0;
     constexpr size_t CLOCK_MONOTONIC = 1;
@@ -27,8 +27,8 @@ namespace sched {
                     .tv_nsec = this->tv_nsec + other.tv_nsec
                 };
 
-                if (res.tv_nsec > TIMER_HZ) {
-                    res.tv_nsec -= TIMER_HZ;
+                if (res.tv_nsec > NANOS_PER_MILLI) {
+                    res.tv_nsec -= NANOS_PER_MILLI;
                     res.tv_sec++;
                 }
 
@@ -42,7 +42,7 @@ namespace sched {
                 };
 
                 if (res.tv_nsec < 0) {
-                    res.tv_nsec += TIMER_HZ;
+                    res.tv_nsec += NANOS_PER_MILLI;
                     res.tv_sec--;
                 }
 
@@ -54,7 +54,7 @@ namespace sched {
                 return res;                    
             }
 
-            timespec ms(int ms) {
+            static timespec ms(int ms) {
                 return {
                     .tv_sec = ms / 1000,
                     .tv_nsec = (ms % 1000) * 100000

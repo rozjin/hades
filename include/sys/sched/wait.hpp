@@ -47,7 +47,7 @@ namespace ipc {
 
             trigger *timer_trigger;
             void set_timer(sched::timespec *time);
-            sched::thread *block(sched::thread *waiter);
+            frg::tuple<sched::thread *, bool> block(sched::thread *waiter);
 
             queue(): last_waker(nullptr), waiters(), lock(), timer_trigger(nullptr) {}
             ~queue() {

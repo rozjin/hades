@@ -1,6 +1,7 @@
 #ifndef KB_HPP
 #define KB_HPP
 
+#include <arch/x86/types.hpp>
 #include <cstdint>
 
 namespace kb {
@@ -9,6 +10,7 @@ namespace kb {
     constexpr uint8_t KBD_PS2_COMMAND = 0x64;
 
     void init();
+    void irq_handler(arch::irq_regs *r);
 };
 
 #endif

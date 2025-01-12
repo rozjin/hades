@@ -26,12 +26,14 @@ namespace vmm {
         USER =  (1 << 2),
         LARGE = (1 << 7),
 
-        FIXED = (1 << 8),
-        COW = (1 << 9),
-        SHARED = (1 << 10),
-        FILE = (1 << 11),
+        DEMAND = (1 << 9),
 
-        EXEC = 0
+        COW = (1 << 10),
+
+        SHARED = (1 << 11),
+        PRIVATE = (1ULL << 52),
+
+        EXEC = (1ULL << 63)
     };
 
     inline constexpr page_flags
@@ -88,7 +90,8 @@ namespace arch {
         uint64_t rax, rbx, rcx, rdx, rbp, rdi, rsi, r8, r9, r10, r11, r12, r13, r14, r15;
         uint64_t rsp, rip;
 
-        uint64_t ss, cs, fs;
+        uint64_t ss, cs;
+        uint64_t fs, gs;
         uint64_t rflags;
         uint64_t cr3;
 
@@ -186,12 +189,17 @@ namespace x86 {
     constexpr size_t IRQ0 = 32;
 
     constexpr size_t entries_per_table = 512;
-    constexpr size_t addr_mask = ~0x8000000000000FFF;
+    constexpr size_t perms_mask = 0xFFF0000000000FFF;
+    constexpr size_t addr_mask = ~perms_mask;
 
     constexpr uint64_t EFER = 0xC0000080;
     constexpr uint64_t STAR = 0xC0000081;
     constexpr uint64_t LSTAR = 0xC0000082;
     constexpr uint64_t SFMASK = 0xC0000084;
+
+    constexpr size_t MSR_FS_BASE = 0xC0000100;
+    constexpr size_t MSR_GS_BASE = 0xC0000101;
+    constexpr size_t KERNEL_GS_BASE = 0xC0000102;
 
     template<typename V>
     void wrmsr(uint64_t msr, V value) {
@@ -229,6 +237,26 @@ namespace x86 {
         asm volatile ("swapgs" ::: "memory");
     }
 
+    inline void set_kernel_gs(uint64_t addr) {
+        wrmsr(MSR_GS_BASE, addr);
+    }
+
+    inline void set_user_gs(uint64_t addr) {
+        wrmsr(KERNEL_GS_BASE, addr);
+    }
+
+    inline uint64_t get_user_gs() {
+        return rdmsr<uint64_t>(KERNEL_GS_BASE);
+    }
+
+    inline void set_user_fs(uint64_t addr) {
+        wrmsr(MSR_FS_BASE, addr);
+    }
+
+    inline uint64_t get_user_fs() {
+        return rdmsr<uint64_t>(MSR_FS_BASE);
+    }
+
     inline uint64_t get_cr3(vmm::vmm_ctx_map map) {
         return (uint64_t) memory::remove_virt(map);
     }
@@ -254,7 +282,7 @@ namespace x86 {
     }
 
     inline void invlpg(uint64_t virt) {
-        asm volatile("invlpg (%0)":: "b"(virt) : "memory");
+        asm volatile("invlpg (%0)":: "r"(virt) : "memory");
     }
 }
 

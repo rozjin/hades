@@ -9,14 +9,37 @@ using tid_t = int;
 using uid_t = uint32_t;
 using gid_t = int32_t;
 
+using blksize_t = int64_t;
+using blkcnt_t = int64_t;
+
+using dev_t = uint64_t;
 using ino_t = uint64_t;
 using mode_t = int32_t;
+using nlink_t = int32_t;
 using clockid_t = uint64_t;
 using time_t = long;
 
 using sigset_t = uint64_t;
 using ssize_t = int64_t;
 using off_t = int64_t;
+
+constexpr int S_IRWXU = 0700;
+constexpr int S_IRUSR = 0400;
+constexpr int S_IWUSR = 0200;
+constexpr int S_IXUSR = 0100;
+constexpr int S_IRWXG = 070;
+constexpr int S_IRGRP = 040;
+constexpr int S_IWGRP = 020;
+constexpr int S_IXGRP = 010;
+constexpr int S_IRWXO = 07;
+constexpr int S_IROTH = 04;
+constexpr int S_IWOTH = 02;
+constexpr int S_IXOTH = 01;
+constexpr int S_ISUID = 04000;
+constexpr int S_ISGID = 02000;
+constexpr int S_ISVTX = 01000;
+
+constexpr int DEFAULT_MODE = S_IRWXU | S_IRWXG | S_IRWXO;
 
 constexpr int O_CREAT = 0x000010;
 constexpr int O_APPEND = 0x000008;
@@ -25,9 +48,20 @@ constexpr int O_EXCL = 0x000040;
 constexpr int O_DIRECTORY = 0x000020;
 constexpr int O_TRUNC = 0x000200;
 
+constexpr int O_ACCMODE = 0x0007;
+constexpr int O_EXEC = 1;
 constexpr int O_RDONLY = 2;
-constexpr int O_WRONLY = 5;
 constexpr int O_RDWR = 3;
+constexpr int O_WRONLY = 5;
+
+constexpr int S_IFMT     = 0x0f000;
+constexpr int S_IFBLK   = 0x06000;
+constexpr int S_IFCHR   = 0x02000;
+constexpr int S_IFIFO   = 0x01000;
+constexpr int S_IFREG   = 0x08000;
+constexpr int S_IFDIR   = 0x04000;
+constexpr int S_IFLNK   = 0x0a000;
+constexpr int S_IFSOCK = 0x0c000;
 
 constexpr int O_NOCTTY = 0x000080;
 
@@ -40,6 +74,11 @@ constexpr int AT_SYMLINK_NOFOLLOW = 4;
 constexpr int SEEK_SET = 1;
 constexpr int SEEK_CUR = 2;
 constexpr int SEEK_END = 3;
+
+constexpr int F_OK = 1;
+constexpr int R_OK = 2;
+constexpr int W_OK = 4;
+constexpr int X_OK = 8;
 
 constexpr int F_DUPFD = 1;
 constexpr int F_DUPFD_CLOEXEC = 2;
@@ -63,12 +102,28 @@ constexpr size_t DT_LNK = 10;
 constexpr size_t DT_SOCK = 12;
 constexpr size_t DT_WHT = 14;
 
-struct [[gnu::packed]] dirent {
+struct dirent {
     ino_t d_ino;
     off_t d_off;
     uint16_t d_reclen;
     uint8_t d_type;
     char d_name[1024];
+};
+
+constexpr size_t POLLIN = 0x01;
+constexpr size_t POLLOUT = 0x02;
+constexpr size_t POLLPRI = 0x04;
+constexpr size_t POLLHUP = 0x08;
+constexpr size_t POLLERR = 0x10;
+constexpr size_t POLLRDHUP = 0x20;
+constexpr size_t POLLNVAL = 0x40;
+constexpr size_t POLLWRNORM = 0x80;
+
+using nfds_t = size_t;
+struct pollfd {
+    int fd;
+    short events;
+    short revents;
 };
 
 #endif

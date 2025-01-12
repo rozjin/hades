@@ -7,6 +7,7 @@
 #define LENGTHOF(x) (sizeof(x) / sizeof(x[0]))
 
 extern void syscall_openat(arch::irq_regs *);
+extern void syscall_accessat(arch::irq_regs *);
 extern void syscall_pipe(arch::irq_regs *);
 extern void syscall_lseek(arch::irq_regs *);
 extern void syscall_dup2(arch::irq_regs *);
@@ -24,11 +25,12 @@ extern void syscall_fcntl(arch::irq_regs *);
 
 extern void syscall_mmap(arch::irq_regs *);
 extern void syscall_munmap(arch::irq_regs *);
+extern void syscall_mprotect(arch::irq_regs *);
 
 extern void syscall_exec(arch::irq_regs *);
 extern void syscall_fork(arch::irq_regs *);
 extern void syscall_exit(arch::irq_regs *);
-extern void syscall_futex(arch::irq_regs *r);
+extern void syscall_futex(arch::irq_regs *);
 extern void syscall_waitpid(arch::irq_regs *);
 extern void syscall_sleep(arch::irq_regs *);
 extern void syscall_clock_gettime(arch::irq_regs *);
@@ -51,26 +53,42 @@ extern void syscall_sigsuspend(arch::irq_regs *);
 extern void syscall_getcwd(arch::irq_regs *);
 extern void syscall_chdir(arch::irq_regs *);
 
+extern void syscall_getuid(arch::irq_regs *);
+extern void syscall_setuid(arch::irq_regs *);
+extern void syscall_geteuid(arch::irq_regs *);
+extern void syscall_seteuid(arch::irq_regs *);
+extern void syscall_getgid(arch::irq_regs *);
+extern void syscall_setgid(arch::irq_regs *);
+extern void syscall_getegid(arch::irq_regs *);
+extern void syscall_setegid(arch::irq_regs *);
+
+extern void syscall_sethostname(arch::irq_regs *);
+extern void syscall_gethostname(arch::irq_regs *);
+extern void syscall_poll(arch::irq_regs *);
+extern void syscall_ppoll(arch::irq_regs *);
+
 void syscall_set_fs_base(arch::irq_regs *r) {
     uint64_t addr = r->rdi;
 
     x86::get_thread()->ctx.reg.fs = addr;
-    x86::wrmsr(x86::fsBase, addr);
+    x86::set_user_fs(addr);
     r->rax = 0;
 }
 
 void syscall_get_fs_base(arch::irq_regs *r) {
-    r->rax = x86::rdmsr<uint64_t>(x86::fsBase);
+    r->rax = x86::get_user_fs();
 }
 
 void syscall_set_gs_base(arch::irq_regs *r) {
     uint64_t addr = r->rdi;
-    x86::wrmsr(x86::gsBase, addr);
+
+    x86::get_thread()->ctx.reg.gs = addr;
+    x86::set_user_gs(addr);
     r->rax = 0;
 }
 
 void syscall_get_gs_base(arch::irq_regs *r) {
-    r->rax = x86::rdmsr<uint64_t>(x86::gsBase);
+    r->rax = x86::get_user_gs();
 }
 
 static log::subsystem logger = log::make_subsystem("USER");
@@ -98,7 +116,7 @@ static x86::syscall_handler syscalls_list[] = {
     syscall_getpid,
     syscall_gettid,
     syscall_getppid,
-    
+
     syscall_fcntl,
     syscall_statat,
     syscall_ioctl,
@@ -136,7 +154,7 @@ static x86::syscall_handler syscalls_list[] = {
     syscall_pause,
     syscall_sigsuspend,
     syscall_sigreturn,
-    
+
     syscall_unlinkat,
     syscall_renameat,
     // TODO: symlinkat, readlinkat
@@ -147,6 +165,24 @@ static x86::syscall_handler syscalls_list[] = {
     syscall_linkat,
 
     syscall_user_log,
+
+    syscall_getuid,
+    syscall_setuid,
+    syscall_geteuid,
+    syscall_seteuid,
+    syscall_getgid,
+    syscall_setgid,
+    syscall_getegid,
+    syscall_setegid,
+
+    syscall_mprotect,
+
+    syscall_sethostname,
+    syscall_gethostname,
+
+    syscall_accessat,
+    syscall_poll,
+    syscall_ppoll
 };
 
 extern "C" {
@@ -160,17 +196,17 @@ extern "C" {
         }
 
         // TODO: signal queue
-        auto process = x86::get_process();
-        process->sig_ctx.active = false;
+        auto thread = x86::get_thread();
+        thread->in_syscall = true;
 
         if (syscalls_list[syscall_num] != nullptr) {
             syscalls_list[syscall_num](r);
         }
 
-        if (r->rax != uint64_t(-1)) {
+        if (r->rax >= 0) {
             x86::set_errno(0);
         }
 
-        process->sig_ctx.active = true;
+        thread->in_syscall = false;
     }
 }

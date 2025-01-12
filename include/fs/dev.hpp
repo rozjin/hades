@@ -2,6 +2,7 @@
 #define DEVFS_HPP
 
 #include "frg/string.hpp"
+#include "util/types.hpp"
 #include <cstddef>
 #include <frg/hash.hpp>
 #include <frg/hash_map.hpp>
@@ -85,7 +86,8 @@ namespace vfs {
             ssize_t write(node *file, void *buf, size_t len, off_t offset) override;
             ssize_t ioctl(node *file, size_t req, void *buf) override;
             void *mmap(node *file, void *addr, size_t len, off_t offset) override;
-            ssize_t mkdir(node *dst, frg::string_view name, int64_t flags) override;
+            ssize_t mkdir(node *dst, frg::string_view name, int64_t flags, mode_t mode,
+                uid_t uid, gid_t gid) override;
     };
 };
 

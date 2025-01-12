@@ -42,8 +42,8 @@
 
                     "-machine", "q35",
 
-                    "-drive", "index=0,media=disk,file=build/hades.img",
-                    "-drive", "index=1,media=disk,file.filename=build/persist.img,file.locking=off"
+                    "-drive", "index=0,media=disk,file=build/hades.img,format=raw",
+                    "-drive", "index=1,media=disk,file.filename=build/persist.img,file.locking=off,format=raw"
                 ]
             },
             "dependsOn": ["Build Hades"]
@@ -70,8 +70,8 @@
                     "-no-reboot", "-no-shutdown",
 
                     "-machine", "q35",
-                    "-drive", "index=0,media=disk,file=build/hades.img",
-                    "-drive", "index=1,media=disk,file.filename=build/persist.img,file.locking=off"
+                    "-drive", "index=0,media=disk,file=build/hades.img,format=raw",
+                    "-drive", "index=1,media=disk,file.filename=build/persist.img,file.locking=off,format=raw",
                 ]
             },
             "dependsOn": ["Build Hades"]

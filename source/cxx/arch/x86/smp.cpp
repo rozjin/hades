@@ -52,7 +52,7 @@ extern "C" {
         cpuBootupLock.acquire();
         
         auto *cpu = (x86::processor *) entry_ctx->extra_argument;
-        x86::wrmsr(x86::gsBase, cpu);
+        x86::wrmsr(x86::MSR_GS_BASE, cpu);
 
         apic::lapic::setup();
         x86::hook_irqs();
@@ -100,7 +100,7 @@ void x86::init_smp() {
 }
 
 x86::processor *x86::get_locals() {
-    return x86::rdmsr<x86::processor *>(x86::gsBase);
+    return x86::rdmsr<x86::processor *>(x86::MSR_GS_BASE);
 }
 
 x86::tss::gdtr real_gdt;

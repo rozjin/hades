@@ -2,6 +2,7 @@
 #include <arch/types.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <driver/tty/tty.hpp>
 #include <fs/vfs.hpp>
 #include <frg/allocation.hpp>
 #include <frg/vector.hpp>
@@ -38,19 +39,14 @@ sched::thread *sched::create_thread(void (*main)(), uint64_t rsp, vmm::vmm_ctx *
     task->mem_ctx = ctx;
 
     task->waitq  = frg::construct<ipc::queue>(memory::mm::heap);
-    task->release_waitq = false;
-    task->dispatch_signals = false;
+    task->dispatch_ready = false;
+    task->pending_signal = false;
+    task->in_syscall = false;
 
     arch::init_context(task, main, rsp, privilege);
 
     task->state = sched::thread::READY;
-    task->cpu = -1;   
-
-    task->env.envc = 0;
-    task->env.argc = 0;
-    task->env.env = nullptr;
-    task->env.argv = nullptr;
-    task->proc = nullptr;
+    task->cpu = -1;
 
     return task;
 }
@@ -84,13 +80,33 @@ sched::process *sched::create_process(char *name, void (*main)(), uint64_t rsp, 
         sa->handler.sa_sigaction = (void (*)(int, signal::siginfo *, void *)) SIG_DFL;
     }
 
+    proc->sig_ctx = signal::process_ctx{};
+
     proc->waitq = frg::construct<ipc::queue>(memory::mm::heap);;
     proc->notify_status = frg::construct<ipc::trigger>(memory::mm::heap);;
-    proc->privilege = privilege;
 
+    proc->real_uid = 0;
+    proc->effective_uid = 0;
+    proc->saved_uid = 0;
+
+    proc->real_gid = 0;
+    proc->effective_gid = 0;
+    proc->saved_gid = 0;
+
+    proc->umask = 022;
+
+    proc->privilege = privilege;
     proc->status = WCONTINUED_CONSTRUCT;
 
     return proc;
+}
+
+sched::process_group *sched::create_process_group(process *leader) {
+    return frg::construct<sched::process_group>(memory::mm::heap, leader);
+}
+
+sched::session *sched::create_session(process *leader, process_group *group) {
+    return frg::construct<sched::session>(memory::mm::heap, leader, group);
 }
 
 sched::thread *sched::fork(thread *original, vmm::vmm_ctx *ctx, arch::irq_regs *r) {
@@ -105,23 +121,18 @@ sched::thread *sched::fork(thread *original, vmm::vmm_ctx *ctx, arch::irq_regs *
     task->sig_ctx = signal::thread_ctx{};
     task->sig_ctx.waitq = frg::construct<ipc::queue>(memory::mm::heap);
     task->sig_ctx.sigmask = original->sig_ctx.sigmask;
-    
+
     task->mem_ctx = ctx;
 
     arch::fork_context(original, task, r);
 
     task->waitq = frg::construct<ipc::queue>(memory::mm::heap);
-    task->release_waitq = original->release_waitq;
-    task->dispatch_signals = original->dispatch_signals;
+    task->dispatch_ready = original->dispatch_ready;
+    task->pending_signal = original->pending_signal;
+    task->in_syscall = original->in_syscall;
 
     task->state = thread::READY;
     task->cpu = -1;
-
-    task->env.envc = original->env.envc;
-    task->env.argc = original->env.argc;
-    task->env.env = original->env.env;
-    task->env.argv = original->env.argv;
-    task->proc = nullptr;
 
     return task;
 }
@@ -139,7 +150,7 @@ sched::process *sched::fork(process *original, thread *caller, arch::irq_regs *r
 
     proc->parent = original;
     proc->ppid = original->ppid;
-    proc->trampoline = 0;
+    proc->trampoline = original->trampoline;
     memcpy(&proc->sigactions, &original->sigactions, SIGNAL_MAX * sizeof(signal::sigaction));
 
     proc->env = original->env;
@@ -152,8 +163,11 @@ sched::process *sched::fork(process *original, thread *caller, arch::irq_regs *r
 
     proc->sess = original->sess;
     if (original->group) {
-        proc->group = original->group;
-        original->group->procs.push_back(proc);
+        original->group->add_process(proc);
+    }
+
+    if (original->sess) {
+        proc->sess = original->sess;
     }
 
     proc->lock = util::lock();
@@ -162,7 +176,15 @@ sched::process *sched::fork(process *original, thread *caller, arch::irq_regs *r
 
     proc->real_uid = original->real_uid;
     proc->effective_uid = original->effective_uid;
+    proc->saved_uid = original->saved_uid;
+
+    proc->real_gid = original->real_gid;
+    proc->effective_gid = original->effective_gid;
     proc->saved_gid = original->saved_gid;
+
+    proc->umask  = original->umask;
+
+    proc->sig_ctx = signal::process_ctx{};
 
     proc->waitq = frg::construct<ipc::queue>(memory::mm::heap);
     proc->notify_status = frg::construct<ipc::trigger>(memory::mm::heap);
@@ -182,8 +204,8 @@ int sched::do_futex(uintptr_t vaddr, int op, int expected, timespec *timeout) {
 sched::thread *sched::process::pick_thread(int signum) {
     for (size_t i = 0; i < threads.size(); i++) {
         if (threads[i] == nullptr) continue;
-        if (threads[i]->state == thread::DEAD || threads[i]->dispatch_signals) continue;
-        if (threads[i]->sig_ctx.sigmask & SIGMASK(signum)) continue;
+        if (threads[i]->state == thread::DEAD) continue;
+        if (threads[i]->sig_ctx.sigpending & SIGMASK(signum)) continue;
 
         return threads[i];
     }
@@ -270,6 +292,56 @@ void sched::process::kill(int exit_code) {
 
     parent->children[parent->find_child(this)] = nullptr;
     parent->zombies.push_back(this);
+
+    if (group->leader_pid == this->pid) {
+        group->remove_process(this);
+        if (group->process_count > 0) {
+            group->sess->remove_group(group);
+            frg::destruct(memory::mm::heap, group);
+        } else {
+            bool is_orphan = true;
+            for (size_t i = 0; i < group->procs.size(); i++) {
+                sched::process *proc = group->procs[i];
+                if (proc == nullptr) continue;
+                if (proc->parent->group != group && proc->parent->group->sess != proc->sess) {
+                    is_orphan = false;
+                }
+            }
+
+            if (is_orphan) {
+                signal::send_group(nullptr, group, SIGHUP);
+                signal::send_group(nullptr, group, SIGCONT);
+            }
+        }
+    }
+
+    if (sess->leader_pgid == this->pid) {
+        if (sess->tty) {
+            sess->tty->sess = nullptr;
+            signal::send_group(nullptr, sess->tty->fg, SIGHUP);
+
+            auto foreground_group = sess->tty->fg;
+            if (foreground_group) {
+                signal::send_group(nullptr, foreground_group, SIGHUP);
+            }
+        }
+
+        for (size_t i = 0; i < sess->groups.size(); i++) {
+            auto group = sess->groups[i];
+            if (group == nullptr) continue;
+
+            group->sess = nullptr;
+            for (size_t j = 0; j < group->procs.size(); j++) {
+                auto process = group->procs[j];
+                if (process == nullptr) continue;
+
+                process->sess = nullptr;
+            }
+        }
+
+        sess->groups.clear();
+        frg::destruct(memory::mm::heap, sess);
+    }
 
     status = WEXITED_CONSTRUCT(exit_code) | STATUS_CHANGED;
     notify_status->arise(main_thread);
@@ -445,8 +517,8 @@ frg::tuple<int, pid_t> sched::process::waitpid(pid_t pid, thread *waiter, int op
 
     do_wait:
         while (true) {
-            auto thread = waitq->block(waiter);
-            if (thread == nullptr) {
+            auto [thread, got_signal] = waitq->block(waiter);
+            if (got_signal) {
                 goto finish;
             }
 
@@ -488,7 +560,7 @@ int64_t sched::pick_task() {
         if (task) {
             if (task->cpu != -1) continue;
             if (task->state == thread::READY
-                || task->dispatch_signals) {
+                || task->dispatch_ready) {
                 return task->tid;
             }
         }
@@ -499,7 +571,7 @@ int64_t sched::pick_task() {
         if (task) {
             if (task->cpu != -1) continue;
             if (task->state == thread::READY
-                || task->dispatch_signals) {
+                || task->dispatch_ready) {
                 return task->tid;
             }
         }
@@ -517,33 +589,38 @@ void sched::swap_task(arch::irq_regs *r) {
     }
 
     int64_t next_tid = pick_task();
-    if (next_tid == -1) {
-        if (arch::get_tid() != arch::get_idle() && arch::get_pid() != -1
-            && !signal::process_signals(running_task->proc, &running_task->ctx)) {
-            goto swap_regs;
-        }
 
+    if (next_tid == -1) {
         auto idle_task = threads[arch::get_idle()];
 
+        if (arch::get_tid() != arch::get_idle() && arch::get_pid() != -1) {
+            if (signal::process_signals(running_task->proc, running_task) == 0) {
+                goto swap_regs;
+            }
+        }
+ 
         arch::set_process(nullptr);
         arch::set_thread(idle_task);
 
         running_task = idle_task;
+
+        swap_regs:
+        arch::rstor_context(running_task, r);
     } else {
         auto next_task = threads[next_tid];
-        if (next_task->pid != -1) {
-            signal::process_signals(next_task->proc, &next_task->ctx);
-        }
 
+        arch::rstor_context(next_task, r);
         arch::set_process(next_task->proc);
         arch::set_thread(next_task);
 
         running_task = next_task;
         running_task->running = true;
         running_task->state = thread::RUNNING;
+
+        if (next_task->pid != -1) {
+            signal::process_signals(next_task->proc, next_task);
+        }
     }
 
-    swap_regs:
-    arch::rstor_context(running_task, r);
     sched_lock.release();
 }

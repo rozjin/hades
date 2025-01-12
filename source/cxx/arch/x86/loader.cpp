@@ -27,7 +27,6 @@ void x86::loader::place_params(char **envp, char **argv, sched::thread *task, sc
     task->ctx.reg.rsp = (uint64_t) location;
 }
 
-log::subsystem logger = log::make_subsystem("ELF");
 bool x86::loader::load_elf(const char *path, vfs::fd *fd, sched::process_env *env) {
     if (!fd) {
         return false;
@@ -46,7 +45,7 @@ bool x86::loader::load_elf(const char *path, vfs::fd *fd, sched::process_env *en
     vfs::close(fd);
 
     if (env->has_interp) {
-        fd = vfs::open(nullptr, env->interp_path, fd->table, 0, 0);
+        fd = vfs::open(nullptr, env->interp_path, fd->table, 0, 0, 0, 0);
         if (!fd) {
             kfree(env->interp_path);
             return -1;
@@ -68,7 +67,6 @@ bool x86::loader::load_elf(const char *path, vfs::fd *fd, sched::process_env *en
 
         env->entry = env->interp.aux.at_entry;
 
-        kmsg(logger, "fd: %lx, path: %s", fd, env->interp_path);
         vfs::close(fd);
     }
 

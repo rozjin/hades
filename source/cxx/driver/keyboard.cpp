@@ -1,4 +1,5 @@
 #include "driver/keyboard.hpp"
+#include "arch/types.hpp"
 #include "arch/x86/types.hpp"
 #include "driver/tty/tty.hpp"
 #include "sys/x86/apic.hpp"
@@ -89,7 +90,7 @@ static int get_character(char *character) {
     }
 
     if (code == 0x3A) {
-        is_shift_locked = !is_shift_locked;
+        is_shift_locked ^= 1;
         return -1;
     }
 
@@ -140,10 +141,10 @@ static int get_character(char *character) {
         }
 
         if (is_ctrl) {
-            if ((*character >= 'A' && *character <= 'z')) {
+            if ((*character >= 'A' && (*character <= 'z'))) {
                 if (*character >= 'a') {
                     *character = *character - 'a' + 1;
-                } else {
+                } else if (*character <= '^') {
                     *character = *character - 'A' + 1;
                 }
             }
@@ -176,7 +177,7 @@ void flush() {
     }
 }
 
-void ps2_handler(arch::irq_regs *r) {
+void kb::irq_handler(arch::irq_regs *r) {
     if (!tty::active_tty) {
         flush();
         return;
@@ -185,7 +186,7 @@ void ps2_handler(arch::irq_regs *r) {
     tty::active_tty->in_lock.irq_acquire();
     while (true) {
         uint8_t status = io::readb(kb::KBD_PS2_STATUS);
-        if (!(status & (1 << 0))) {
+        if ((status & (1 << 0)) == 0) {
             break;
         }
 
@@ -196,6 +197,7 @@ void ps2_handler(arch::irq_regs *r) {
         char c = '\0';
         int fun = get_character(&c);
         tty::active_tty->handle_signal(c);
+        tty::active_tty->kbd_trigger->arise(arch::get_thread());
 
         if (c != '\0') {
             tty::active_tty->in.push(c);
@@ -219,7 +221,7 @@ void kb::init() {
     disable();
     flush();
 
-    size_t vector = arch::install_irq(ps2_handler);
+    size_t vector = arch::install_irq(irq_handler);
     arch::route_irq(2, vector);
 
     enable();

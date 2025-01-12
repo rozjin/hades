@@ -1,6 +1,7 @@
 #ifndef E1000_HPP
 #define E1000_HPP
 
+#include <driver/net/device.hpp>
 #include <driver/net/types.hpp>
 #include <frg/functional.hpp>
 #include <frg/hash_map.hpp>
@@ -141,7 +142,7 @@ namespace e1000 {
     void init();
     void irq_handler(arch::irq_regs *r);
 
-    struct device {
+    struct device: net::device {
         private:
             pci::device *pci_dev;
 
@@ -150,10 +151,6 @@ namespace e1000 {
             uint64_t mem_base;
             bool is_e1000e;
             bool has_eeprom;
-            net::mac mac;
-
-            char *ipv4_gateway;
-            char *ipv4_addr;
 
             rx_desc *rx_descs[rx_max];
             tx_desc *tx_descs[tx_max];
@@ -175,21 +172,22 @@ namespace e1000 {
 
             void rx_handle();
 
-            void arp_send(net::mac dest_mac, uint32_t dest_ip);
-            void arp_handle(void *pkt);
-            void arp_probe();
-
-            frg::hash_map<uint32_t, uint8_t *, frg::hash<uint32_t>, memory::mm::heap_allocator> arp_table;
         public:
             friend void e1000::init();
             friend void irq_handler(arch::irq_regs *r);
 
             bool init();
+            
+            void send(const void *buf, size_t len) override;
 
-            uint8_t *get_mac();
-            void send(const void *buf, size_t len);
-
-            device(): arp_table(frg::hash<uint32_t>()) {}
+            void init_routing() override;
+            void add_route(const char *ipv4_dest, 
+                const char *ipv4_gateway, const char *ipv4_netmask,
+                uint16_t mtu = 576,
+                uint32_t dest_mask = 0xFFFFFFFF) override;
+            uint32_t route(uint32_t dest) override;
+            
+            device(): net::device()  {}
     };
 }
 

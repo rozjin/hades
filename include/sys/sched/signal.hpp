@@ -66,7 +66,11 @@
 
 #define SIGNAL_MAX 32
 
-#define SIGMASK(SIG) (1ull << ((SIG) - 1))
+constexpr size_t SIGMASK(size_t sig) {
+    return (1ULL << (sig - 1));
+}
+
+// #define SIGMASK(SIG) (1ull << ((SIG) - 1))
 
 namespace sched {
     class process;
@@ -121,8 +125,6 @@ namespace sched {
 
         struct process_ctx {
             sigset_t sigpending;
-
-            bool active;
             util::lock lock;
         };
 
@@ -139,7 +141,7 @@ namespace sched {
 
         int do_sigaction(process *proc, thread *task, int sig, sigaction *act, sigaction *old);
         void do_sigpending(thread *task, sigset_t *set);
-        int do_sigprocmask(thread *proc, int how, sigset_t *set, sigset_t *oldset);
+        int do_sigprocmask(thread *task, int how, sigset_t *set, sigset_t *oldset);
         int do_kill(pid_t pid, int sig);
         
         int wait_signal(thread *task, sigset_t sigmask, timespec *time);
@@ -148,7 +150,11 @@ namespace sched {
         bool send_group(process *sender, process_group *target, int sig);
         bool check_perms(process *sender, process *target);
         bool is_valid(int sig);
-        int process_signals(process *proc, arch::thread_ctx *ctx);
+
+        int issue_signals(process *proc);
+        
+        int dispatch_signals(process *proc, thread *task);
+        int process_signals(process *proc, thread *task);
 
         bool is_blocked(thread *task, int sig);
         bool is_ignored(process *proc, int sig);

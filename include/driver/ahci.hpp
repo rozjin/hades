@@ -311,6 +311,7 @@ namespace ahci {
 
             ssize_t find_cmdslot();
             command_slot issue_read_write(void *buf, uint16_t count, size_t offset, bool rw);
+            ssize_t do_sector_io(void *buf, uint16_t count, size_t offset, bool rw);
         public:
             friend void ahci::init();
             friend ssize_t find_cmdslot(ahci::device *device);

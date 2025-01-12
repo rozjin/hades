@@ -22,6 +22,7 @@ constexpr auto fontHeight = 16;
 constexpr auto fontWidth = 8;
 constexpr auto fontSize = fontWidth * fontHeight;
 
+bool video::vesa::disabled = false;
 void video::vesa::init(stivale::boot::tags::framebuffer fbinfo) {
     width = fbinfo.width;
     height = fbinfo.height;
@@ -48,6 +49,7 @@ void video::vesa::init(stivale::boot::tags::framebuffer fbinfo) {
 }
 
 void video::vesa::write_log(char c) {
+    if (disabled) return;
     flanterm_write(ft_ctx, &c, 1);
 }
 

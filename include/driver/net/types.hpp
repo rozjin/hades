@@ -32,6 +32,25 @@ namespace net {
 
         return true;
     }
+
+    struct route {
+        uint32_t dest;
+        uint32_t gateway;
+        uint32_t netmask;
+        uint16_t mtu;
+
+        route(uint32_t dest, uint32_t gateway, uint32_t netmask, uint16_t mtu): dest(dest), gateway(gateway), netmask(netmask), mtu(mtu) {};
+    };
+    
+    struct checksum {
+        private:
+            uint32_t state = 0;
+        public:
+            void update(uint16_t word);
+            void update(const void *buf, size_t size);
+
+            uint16_t finalize();
+    };
 }
 
 #endif

@@ -121,7 +121,7 @@ extern "C" {
         }
 
         if (r->int_no < 32) {
-            vmm::boot->swap_in();
+            //vmm::boot->swap_in();
             if (r->cs != 0x1B) {
                 x86::stop_all_cpus();
 
@@ -184,6 +184,9 @@ extern "C" {
                     if (r->err & (1 << 2)) { kmsg(logger, "  U"); } else { kmsg(logger, "  S"); }
                     if (r->err & (1 << 3)) { kmsg(logger, "  RES"); }
                 }
+
+                x86::stop_all_cpus();
+                while (true) { asm volatile("hlt"); }
 
                 auto task = x86::get_thread();
 

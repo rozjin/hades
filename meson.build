@@ -17,7 +17,12 @@ main_sources = files(
     'source/cxx/arch/x86/copy.cpp',
     'source/cxx/arch/x86/exception.cpp',
 
+    'source/cxx/driver/net/arp.cpp',
+    'source/cxx/driver/net/ip.cpp',
+    'source/cxx/driver/net/checksum.cpp',
     'source/cxx/driver/net/e1000.cpp',
+    'source/cxx/driver/net/syscall.cpp',
+
     'source/cxx/driver/tty/tty.cpp',
     'source/cxx/driver/tty/pty.cpp',
     'source/cxx/driver/tty/disciplines.cpp',
@@ -35,7 +40,6 @@ main_sources = files(
     'source/cxx/flanterm/backends/fb.cpp',
 
     'source/cxx/fs/dev.cpp',
-    'source/cxx/fs/fat.cpp',
     'source/cxx/fs/ext2.cpp',
     'source/cxx/fs/rootfs.cpp',
     'source/cxx/fs/syscall.cpp',
@@ -83,7 +87,7 @@ ld_script = join_paths(source_dir, 'misc', 'linker.ld')
 
 flags_common = [
 	'-ggdb',
-	'-O3',
+	'-O0',
 	'-ffreestanding',
     '-nostdinc',
 	'-fdiagnostics-color=always',
@@ -128,7 +132,7 @@ lai_includes = lai_proj.get_variable('includes')
 
 make_elf = executable(
     'hades.elf', main_sources, lai_sources,
-    nasm_objects, 
+    nasm_objects,
     include_directories: [main_includes, lai_includes, freestnd_c_hdrs, freestnd_cpp_hdrs],
     link_depends: ld_script, install: true, c_args: flags_common + flags_c, cpp_args: flags_common + flags_cpp, link_args: flags_ld, build_by_default: false)
 
@@ -139,9 +143,9 @@ custom_target(
 	input: make_elf,
 	output: ['hades.img', 'persist.img'],
 	command: [script_path,
-		meson.project_name(), 
+		meson.project_name(),
 		'-k', make_elf,
-		
+
 		'-s', join_paths(meson.project_source_root(), 'source'),
         '-r', join_paths(meson.project_source_root(), 'user/hbuild'),
 

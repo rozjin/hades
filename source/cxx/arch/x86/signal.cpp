@@ -18,7 +18,8 @@ void x86::sigreturn_kill(sched::process *proc, ssize_t status) {
     x86::get_locals()->pid = -1;
 
     task->state = sched::thread::DEAD;
-    task->dispatch_signals = false;
+    task->dispatch_ready = false;
+    task->pending_signal = false;
 
     sched::threads[task->tid] = (sched::thread *) 0;
 
@@ -58,7 +59,10 @@ void x86::sigreturn_default(sched::process *proc, sched::thread *task) {
     x86::set_mxcsr(regs->mxcsr);
     x86::load_sse(task->ucontext.ctx.sse_region);
     
-    task->dispatch_signals = false;
+    task->dispatch_ready = false;
+    task->pending_signal = false;
+    task->in_syscall = false;
+    
     memory::pmm::free((void *) (task->ucontext.stack - (4 * memory::page_size)));
 
     x86_sigreturn_exit(&iretq_regs);
@@ -104,7 +108,9 @@ void sig_default(sched::process *proc, sched::thread *task, int sig) {
     x86::sigreturn_default(proc, task);
 }
 
-void arch::init_default_sigreturn(sched::thread *task, arch::thread_ctx *ctx, sched::signal::signal *signal, sched::signal::ucontext *context) {
+void arch::init_default_sigreturn(sched::thread *task, sched::signal::signal *signal, sched::signal::ucontext *context) {
+    auto ctx = &task->ctx;
+
     context->ctx.reg = ctx->reg;
     memcpy(context->ctx.sse_region, ctx->sse_region, 512);
 
@@ -128,9 +134,11 @@ void arch::init_default_sigreturn(sched::thread *task, arch::thread_ctx *ctx, sc
     memset(ctx->sse_region, 0, 512);
 }
 
-void arch::init_user_sigreturn(sched::thread *task, arch::thread_ctx *ctx, 
+void arch::init_user_sigreturn(sched::thread *task,
     sched::signal::signal *signal, sched::signal::sigaction *action, 
     sched::signal::ucontext *context) {
+    auto ctx = &task->ctx;
+
     context->ctx.reg = ctx->reg;
     memcpy(context->ctx.sse_region, ctx->sse_region, 512);
 

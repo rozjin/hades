@@ -27,6 +27,8 @@ namespace util {
                 __atomic_clear(&this->_lock, __ATOMIC_RELEASE);
                 if (interrupts) {
                     arch::irq_on();
+                } else {
+                    arch::irq_off();
                 }
             }
 

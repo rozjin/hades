@@ -149,18 +149,17 @@ int sched::signal::wait_signal(thread *task, sigset_t sigmask, sched::timespec *
         for (size_t i = 1; i <= SIGNAL_MAX; i++) {
             if (ctx->sigdelivered & SIGMASK(i)) {
                 ctx->sigdelivered &= ~SIGMASK(i);
-                return 0;
+                goto done;
             }
         }
 
-        auto waker = ctx->waitq->block(arch::get_thread());
-        if (waker == nullptr) {
+        auto [waker, got_signal] = ctx->waitq->block(arch::get_thread());
+        if (got_signal) {
             return -1;
         }
-
-        break;
     }
 
+    done:
     return 0;
 }
 
@@ -232,60 +231,78 @@ bool sched::signal::send_group(process *sender, process_group *target, int sig) 
     return true;
 }
 
-int sched::signal::process_signals(process *proc, arch::thread_ctx *ctx) {
+int sched::signal::issue_signals(process *proc) {
     auto proc_ctx = &proc->sig_ctx;
-    proc_ctx->lock.irq_acquire();
-    if (proc_ctx->active == false) {
-        proc_ctx->lock.irq_release();
-        return -1;
-    }
-
-    if (proc_ctx->sigpending == 0) {
-        proc_ctx->lock.irq_release();
-        return 1;
-    }
-
     for (size_t i = 1; i <= SIGNAL_MAX; i++) {
-        if (proc_ctx->sigpending & (SIGMASK(i))) {
+        if (proc_ctx->sigpending & SIGMASK(i)) {
             auto task = proc->pick_thread(i);
-            auto task_ctx = &task->sig_ctx;
-            if (!task) {
-                proc_ctx->lock.irq_release();
+            if (task == nullptr) {
                 return -1;
             }
 
-            auto action = &proc->sigactions[i - 1];
+            auto task_ctx = &task->sig_ctx;
             auto signal = &task_ctx->queue[i - 1];
 
             proc->sig_lock.irq_acquire();
             task_ctx->lock.irq_acquire();
 
-            proc_ctx->sigpending &= ~(SIGMASK(i));
-            task_ctx->sigpending &= ~(SIGMASK(i));
+            proc_ctx->sigpending &= ~SIGMASK(i);
+            task_ctx->sigpending |= SIGMASK(i);
 
             signal->signum = i;
             signal->notify_queue = frg::construct<ipc::trigger>(memory::mm::heap);
-                        
+
+            task_ctx->lock.irq_release();
+            proc->sig_lock.irq_release();            
+        }
+    }
+
+    return 0;
+}
+
+int sched::signal::dispatch_signals(process *proc, thread *task) {
+    if (task->state == thread::DEAD || task->dispatch_ready
+        || task->in_syscall) {
+        if (~task->sig_ctx.sigmask & task->sig_ctx.sigpending) task->pending_signal = true;
+        return -1;
+    }
+
+    for (size_t i = 1; i <= SIGNAL_MAX; i++) {
+        if (task->sig_ctx.sigpending & SIGMASK(i)) {
+            auto task_ctx = &task->sig_ctx;
+            auto signal = &task_ctx->queue[i - 1];
+
+            proc->sig_lock.irq_acquire();
+            task_ctx->lock.irq_acquire();
+
+            if (task->sig_ctx.sigmask & SIGMASK(i)) {
+                task_ctx->lock.irq_release();
+                proc->sig_lock.irq_release();            
+                continue;
+            }
+
+            task->pending_signal = false;
+            task_ctx->sigpending &= ~SIGMASK(i);
+
+            auto action = &proc->sigactions[i - 1];
             if (action->handler.sa_sigaction == SIG_ERR) {
                 task_ctx->lock.irq_release();
                 proc->sig_lock.irq_release();
-                proc_ctx->lock.irq_release();
 
                 return -1;
             } else if (action->handler.sa_sigaction == SIG_IGN) {
-                task_ctx->lock.irq_acquire();
+                task_ctx->lock.irq_release();
                 proc->sig_lock.irq_release();
                 continue;
             }
 
-
-            task->dispatch_signals = true;
+            task->dispatch_ready = true;
             if (action->handler.sa_sigaction == SIG_DFL) {
                 auto stack = memory::pmm::stack(4);
 
                 task->ucontext.stack = (uint64_t) stack;
                 
-                arch::init_default_sigreturn(task, ctx, signal, &task->ucontext);
+                arch::init_default_sigreturn(task, signal, &task->ucontext);
 
                 auto tmp = task->kstack;
                 task->kstack = task->sig_kstack;
@@ -295,15 +312,14 @@ int sched::signal::process_signals(process *proc, arch::thread_ctx *ctx) {
 
                 task_ctx->lock.irq_release();
                 proc->sig_lock.irq_release();
-                proc_ctx->lock.irq_release();
 
                 return 0;
             }
 
-            auto stack = (size_t) proc->mem_ctx->stack(nullptr, 4 * memory::page_size, vmm::map_flags::USER | vmm::map_flags::WRITE);
+            auto stack = (size_t) proc->mem_ctx->stack(nullptr, memory::user_stack_size, vmm::map_flags::USER | vmm::map_flags::WRITE | vmm::map_flags::DEMAND);
             task->ucontext.stack = stack;
             
-            arch::init_user_sigreturn(task, ctx, signal, action, &task->ucontext);
+            arch::init_user_sigreturn(task, signal, action, &task->ucontext);
 
             auto tmp = task->kstack;
             task->kstack = task->sig_kstack;
@@ -316,10 +332,23 @@ int sched::signal::process_signals(process *proc, arch::thread_ctx *ctx) {
             task_ctx->lock.irq_release();
             proc->sig_lock.irq_release();
 
-            break;
+            return 0;
         }
     }
 
+    return -1;
+}
+
+int sched::signal::process_signals(process *proc, thread *task) {
+    auto proc_ctx = &proc->sig_ctx;
+    proc_ctx->lock.irq_acquire();
+
+    issue_signals(proc);
+    if (dispatch_signals(proc, task) < 0) {
+        proc_ctx->lock.irq_release();
+        return -1;
+    }
+    
     proc_ctx->lock.irq_release();
     return 0;
 }

@@ -64,6 +64,9 @@ namespace sched {
     thread *create_thread(void (*main)(), uint64_t rsp, vmm::vmm_ctx *ctx, uint8_t privilege);
     process *create_process(char *name, void (*main)(), uint64_t rsp, vmm::vmm_ctx *ctx, uint8_t privilege);
 
+    process_group *create_process_group(process *leader);
+    session *create_session(process *leader, process_group *group);
+
     thread *fork(thread *original, vmm::vmm_ctx *ctx, arch::irq_regs *r);
     process *fork(process *original, thread *caller, arch::irq_regs *r);
 
@@ -94,15 +97,6 @@ namespace sched {
         size_t uptime;
     };
 
-    class thread_env {
-        public:
-            char **argv;
-            char **env;
-
-            int argc;
-            int envc;
-    };
-
     class thread {
         public:
             arch::thread_ctx ctx;
@@ -130,8 +124,10 @@ namespace sched {
             };
 
             ipc::queue *waitq;
-            bool release_waitq;
-            bool dispatch_signals;
+
+            bool pending_signal;
+            bool dispatch_ready;
+            bool in_syscall;
 
             uint8_t state;
             int64_t cpu;
@@ -143,7 +139,6 @@ namespace sched {
             
             uint8_t privilege;
             bool running;
-            thread_env env;
 
             int64_t start();
             
@@ -224,7 +219,13 @@ namespace sched {
 
             uid_t real_uid;
             uid_t effective_uid;
+            gid_t saved_uid;
+
+            uid_t real_gid;
+            uid_t effective_gid;
             gid_t saved_gid;
+
+            mode_t umask;
 
             uint8_t privilege;
 
@@ -253,18 +254,72 @@ namespace sched {
 
             pid_t leader_pid;
             process *leader;
+            bool is_orphan;
 
             session *sess;
             frg::vector<process *, memory::mm::heap_allocator> procs;
+            size_t process_count;
+
+            process_group(process *leader): pgid(leader->pid), leader_pid(leader->pid), is_orphan(false), sess(nullptr), procs(), process_count(1) {
+                procs.push(leader);
+                
+                leader->group = this;
+            }
+
+            void add_process(process *proc) {
+                procs.push(proc);
+                proc->group = this;
+                process_count++;
+            }
+
+            void remove_process(process *proc) {
+                for (size_t i = 0; i < procs.size(); i++) {
+                    if (procs[i] == proc) {
+                        procs[i] = nullptr;
+                    }
+                }
+
+                process_count--;
+            }
     };
 
+    // TODO: lock these
     class session {
         public:
             pid_t sid;
             pid_t leader_pgid;
+            process *leader;
             frg::vector<process_group *, memory::mm::heap_allocator> groups;
+            size_t group_count;
 
             tty::device *tty;
+
+            session(process *leader, process_group *group): sid(leader->pid), leader_pgid(leader->pid), leader(leader), 
+                groups(), group_count(1), tty(nullptr) {
+                if (!group) {
+                    __builtin_unreachable();
+                }
+
+                groups.push(group);
+                group->sess = this;
+                leader->sess = this;
+            }
+
+            void add_group(process_group *group) {
+                groups.push(group);
+                group->sess = this;
+                group_count++;
+            }
+
+            void remove_group(process_group *group) {
+                for (size_t i = 0; i < groups.size(); i++) {
+                    if (groups[i] == group) {
+                        groups[i] = nullptr;
+                    }
+                }
+
+                group_count--;
+            }            
     };
 
     inline frg::vector<sched::process *, memory::mm::heap_allocator> processes{};

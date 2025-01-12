@@ -5,8 +5,8 @@
 #include <cstddef>
 #include <sys/sched/sched.hpp>
 
-arch::sched_regs default_kernel_regs{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x10, 0x8, 0, 0x202, 0, 0x1F80, 0x33F };
-arch::sched_regs default_user_regs{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x23, 0x1B, 0, 0x202, 0, 0x1F80, 0x33F };
+arch::sched_regs default_kernel_regs{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x10, 0x8, 0, 0, 0x202, 0, 0x1F80, 0x33F };
+arch::sched_regs default_user_regs{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x23, 0x1B, 0, 0, 0x202, 0, 0x1F80, 0x33F };
 
 alignas(16)
 char default_sse_region[512] {};
@@ -88,7 +88,7 @@ void x86::init_bsp() {
     processor->kstack = (size_t) memory::pmm::stack(x86::initialStackSize);
     processor->ctx = vmm::boot;
 
-    x86::wrmsr(x86::gsBase, processor);
+    x86::wrmsr(x86::MSR_GS_BASE, processor);
     x86::cpus.push_back(processor);
     x86::tss::init();
     
@@ -119,7 +119,7 @@ void x86::init_syscalls() {
     x86::wrmsr(EFER, x86::rdmsr<uint64_t>(EFER) | (1 << 0));
     x86::wrmsr(STAR, (0x18ull << 48 | 0x8ull << 32));
     x86::wrmsr(LSTAR, (uintptr_t) syscall_enter);
-    x86::wrmsr(SFMASK, (1 << 9));
+    x86::wrmsr(SFMASK, ~(2ULL));
 }
 
 void arch::cleanup_vmm_ctx(sched::process *process) {
@@ -157,6 +157,7 @@ void arch::init_context(sched::thread *task, void (*main)(), uint64_t rsp, uint8
     task->ctx.reg.rsp = rsp;
     task->privilege = privilege;
     task->pid = -1;
+    task->proc = nullptr;
 
     task->ctx.reg.cr3 = x86::get_cr3(task->mem_ctx->get_page_map());
 }
@@ -186,6 +187,7 @@ void arch::fork_context(sched::thread *original, sched::thread *task, irq_regs *
     task->ctx.reg.ss = r->ss;
 
     task->ctx.reg.fs = original->ctx.reg.fs;
+    task->ctx.reg.gs = original->ctx.reg.gs;
 
     memcpy(task->ctx.sse_region, original->ctx.sse_region, 512);
     
@@ -216,6 +218,9 @@ void arch::save_context(irq_regs *r, sched::thread *task) {
 
     task->ctx.reg.cs = r->cs;
     task->ctx.reg.ss = r->ss;
+
+    task->ctx.reg.fs = x86::get_user_fs();
+    task->ctx.reg.gs = x86::get_user_gs();
 
     x86::save_sse(task->ctx.sse_region);
     task->ctx.reg.mxcsr = x86::get_mxcsr();
@@ -267,7 +272,8 @@ void arch::rstor_context(sched::thread *task, irq_regs *r) {
     r->cs = task->ctx.reg.cs;
     r->ss = task->ctx.reg.ss;
 
-    x86::wrmsr(x86::fsBase, task->ctx.reg.fs);
+    x86::set_user_fs(task->ctx.reg.fs);
+    x86::set_user_gs(task->ctx.reg.gs);
 
     x86::load_sse(task->ctx.sse_region);
     x86::set_mxcsr(task->ctx.reg.mxcsr);
@@ -333,8 +339,8 @@ int x86::do_futex(uintptr_t vaddr, int op, int expected, sched::timespec *timeou
                     break;
                 }
 
-                auto waker = futex->waitq.block(x86::get_thread());
-                if (!waker) {
+                auto [waker, got_signal] = futex->waitq.block(x86::get_thread());
+                if (got_signal) {
                     return -1;
                 }
             }

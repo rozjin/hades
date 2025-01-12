@@ -9,6 +9,8 @@
 #include <frg/string.hpp>
 #include <frg/vector.hpp>
 #include <mm/mm.hpp>
+#include <sys/sched/time.hpp>
+#include <sys/sched/wait.hpp>
 #include <util/lock.hpp>
 #include <util/log/log.hpp>
 #include <util/types.hpp>
@@ -57,7 +59,6 @@ namespace vfs {
             DEVFS,
             TMPFS,
             INITRD,
-            FAT,
             EXT
         };
     };
@@ -72,24 +73,27 @@ namespace vfs {
                     BLOCKDEV,
                     CHARDEV,
                     SOCKET,
-                    SYMLINK
+                    SYMLINK,
+                    FIFO
                 };
             };
 
             struct statinfo {
-                size_t st_dev;
-                size_t st_ino;
-                size_t st_nlink;
-                size_t st_uid;
-                size_t st_gid;
-                size_t st_rdev;
-                size_t st_size;
-                size_t st_blksize;
-                size_t st_blocks;
+                dev_t st_dev;
+                ino_t st_ino;
+                mode_t st_mode;
+                nlink_t st_nlink;
+                uid_t st_uid;
+                gid_t st_gid;
+                dev_t st_rdev;
+                off_t st_size;
 
-                size_t st_atim;
-                size_t st_mtim;
-                size_t st_ctom;
+                sched::timespec st_atim;
+                sched::timespec st_mtim;
+                sched::timespec st_ctim;
+
+                blksize_t st_blksize;
+                blkcnt_t st_blkcnt;
             };
 
             void set_fs(filesystem *fs) {
@@ -140,8 +144,36 @@ namespace vfs {
                 return name;
             }
 
-            statinfo *stat() {
-                return meta;
+            bool has_access(uid_t uid, gid_t gid, int mode) {
+                if (uid == 0) {
+                    return true;
+                }
+
+                mode_t mask_uid = 0, mask_gid = 0, mask_oth = 0;
+
+                if(mode & R_OK) { mask_uid |= S_IRUSR; mask_gid |= S_IRGRP; mask_oth |= S_IROTH; }
+                if(mode & W_OK) { mask_uid |= S_IWUSR; mask_gid |= S_IWGRP; mask_oth |= S_IWOTH; }
+                if(mode & X_OK) { mask_uid |= S_IXUSR; mask_gid |= S_IXGRP; mask_oth |= S_IXOTH; }
+
+                if(meta->st_uid == uid) {
+                    if((meta->st_mode & mask_uid) == mask_uid) {
+                        return true;
+                    }
+
+                    return false;
+                } else if(meta->st_gid == gid) {
+                    if((meta->st_mode & mask_gid) == mask_gid) {
+                        return true;
+                    }
+
+                    return false;
+                } else {
+                    if((meta->st_mode & mask_oth) == mask_oth) {
+                        return true;
+                    }
+
+                    return false;
+                }                
             }
 
             size_t ref_count;
@@ -220,11 +252,13 @@ namespace vfs {
                 return -ENOTSUP;
             }
 
-            virtual ssize_t create(node *dst, path name, int64_t type, int64_t flags) {
+            virtual ssize_t create(node *dst, path name, int64_t type, int64_t flags, mode_t mode,
+                uid_t uid, gid_t gid) {
                 return -ENOTSUP;
             }
 
-            virtual ssize_t mkdir(node *dst, frg::string_view name, int64_t flags) {
+            virtual ssize_t mkdir(node *dst, frg::string_view name, int64_t flags, mode_t mode,
+                uid_t uid, gid_t gid) {
                 return -ENOTSUP;
             }
 
@@ -258,6 +292,9 @@ namespace vfs {
 
         int current_ent;
         frg::vector<dirent *, memory::mm::heap_allocator> dirent_list;
+
+        ipc::trigger *event_trigger;
+        size_t status;
     };
 
     struct pipe {
@@ -291,15 +328,17 @@ namespace vfs {
 
     static size_t zero = 0;
     filesystem *resolve_fs(frg::string_view path, node *base, size_t& symlinks_traversed = zero);
-    node *resolve_at(frg::string_view path, node *base, bool follow_symlink = false, size_t& symlinks_traversed = zero);
+    node *resolve_at(frg::string_view path, node *base, bool follow_symlink = true, size_t& symlinks_traversed = zero);
     path *get_absolute(node *node);
-    node *get_parent(node *dir, frg::string_view path);
+    node *get_parent(node *base, frg::string_view path);
 
     ssize_t mount(frg::string_view srcpath, frg::string_view dstpath, ssize_t fstype, int64_t flags);
     ssize_t umount(node *dst);
 
-    vfs::fd *open(node *dir, frg::string_view filepath, fd_table *table, int64_t flags, int64_t mode);
+    vfs::fd *open(node *base, frg::string_view filepath, fd_table *table, int64_t flags, mode_t mode,
+        uid_t uid, gid_t gid);
     fd_pair open_pipe(fd_table *table, ssize_t flags);
+
     ssize_t lseek(vfs::fd *fd, off_t off, size_t whence);
     vfs::fd *dup(vfs::fd *fd, bool cloexec, ssize_t new_num);
     ssize_t close(vfs::fd *fd);
@@ -307,18 +346,25 @@ namespace vfs {
     ssize_t write(vfs::fd *fd, void *buf, size_t len);
     ssize_t ioctl(vfs::fd *fd, size_t req, void *buf);
     void *mmap(vfs::fd *fd, void *addr, off_t off, size_t len);
+
     ssize_t stat(node *dir, frg::string_view filepath, node::statinfo *buf, int64_t flags);
-    ssize_t create(node *dir, frg::string_view filepath, fd_table *table, int64_t type, int64_t flags, int64_t mode);
-    ssize_t mkdir(node *dir, frg::string_view dirpath, int64_t flags, int64_t mode);
-    ssize_t rename(node *old_dir, frg::string_view oldpath, node *new_dir, frg::string_view newpath, int64_t flags);
-    ssize_t link(node *from_dir, frg::string_view from, node *to_dir, frg::string_view to, bool is_symlink);
-    ssize_t unlink(node *dir, frg::string_view filepath);
-    ssize_t rmdir(node *dir, frg::string_view dirpath);
-    pathlist readdir(node *dir, frg::string_view dirpath);
+
+    ssize_t create(node *base, frg::string_view filepath, fd_table *table, int64_t type, int64_t flags, mode_t mode,
+        uid_t uid, gid_t gid);
+    ssize_t mkdir(node *base, frg::string_view dirpath, int64_t flags, mode_t mode,
+        uid_t uid, gid_t gid);
+    
+    ssize_t rename(node *old_base, frg::string_view oldpath, node *new_base, frg::string_view newpath, int64_t flags);
+    ssize_t link(node *from_base, frg::string_view from, node *to_base, frg::string_view to, bool is_symlink);
+    ssize_t unlink(node *base, frg::string_view filepath);
+    ssize_t rmdir(node *base, frg::string_view dirpath);
+    pathlist readdir(node *base, frg::string_view dirpath);
 
     // fs use only
-    vfs::fd *make_fd(vfs::node *node, fd_table *table, int64_t flags, int64_t mode);
-    vfs::node *make_node(node *dst, frg::string_view path, int64_t type);
+    mode_t type2mode(int64_t type);
+
+    vfs::fd *make_fd(vfs::node *node, fd_table *table, int64_t flags, mode_t mode);
+    vfs::node *make_recursive(node *base, frg::string_view path, int64_t type, mode_t mode);
     filesystem *device_fs();
 
     // sched use

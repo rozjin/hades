@@ -3,6 +3,7 @@
 #include "mm/mm.hpp"
 #include "util/log/log.hpp"
 #include "util/log/panic.hpp"
+#include "util/types.hpp"
 #include <cstddef>
 #include <frg/allocation.hpp>
 #include <fs/vfs.hpp>
@@ -10,16 +11,16 @@
 
 static log::subsystem logger = log::make_subsystem("DEV");
 void vfs::devfs::init() {
-    vfs::mkdir(nullptr, "/dev", 0, O_RDWR);
+    vfs::mkdir(nullptr, "/dev", 0, DEFAULT_MODE, 0, 0);
     vfs::mount("/", "/dev", fslist::DEVFS, mflags::NOSRC);
 
-    vfs::mkdir(nullptr, "/dev/pts", 0, O_RDWR);
+    vfs::mkdir(nullptr, "/dev/pts", 0, DEFAULT_MODE, 0, 0);
     kmsg(logger, "Initial devfs mounted.");
 }
 
 void vfs::devfs::add(frg::string_view path, device *dev) {
     // TODO: device addition
-    node *device_node = vfs::make_node(vfs::device_fs()->root, path, dev->is_blockdev ? node::type::BLOCKDEV : node::type::CHARDEV);
+    node *device_node = vfs::make_recursive(vfs::device_fs()->root, path, dev->is_blockdev ? node::type::BLOCKDEV : node::type::CHARDEV, DEFAULT_MODE);
     if (!device_node) {
         panic("[DEVFS]: Unable to make device: %s", path.data());
     }
@@ -133,8 +134,14 @@ void *vfs::devfs::mmap(node *file, void *addr, size_t len, off_t offset) {
     return device->mmap(file, addr, len, offset);
 }
 
-ssize_t vfs::devfs::mkdir(node *dst, frg::string_view name, int64_t flags) {
+ssize_t vfs::devfs::mkdir(node *dst, frg::string_view name, int64_t flags, mode_t mode,
+    uid_t uid, gid_t gid) {
     node *new_dir = frg::construct<vfs::node>(memory::mm::heap, this, name, dst, flags, node::type::DIRECTORY);
+
+    new_dir->meta->st_uid = uid;
+    new_dir->meta->st_gid = gid;
+    new_dir->meta->st_mode = S_IFDIR | mode;
+
     dst->children.push_back(new_dir);
 
     return 0;

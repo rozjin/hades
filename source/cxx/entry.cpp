@@ -17,7 +17,6 @@
 #include <frg/string.hpp>
 #include <fs/vfs.hpp>
 #include <fs/dev.hpp>
-#include <fs/fat.hpp>
 #include <mm/mm.hpp>
 #include <mm/pmm.hpp>
 #include <mm/vmm.hpp>
@@ -53,75 +52,40 @@ void initarray_run() {
 
 static void run_init() {
     auto ctx = vmm::create();
-    auto stack = ctx->stack(nullptr, 4 * memory::page_size, vmm::map_flags::PRESENT | vmm::map_flags::USER | vmm::map_flags::WRITE | vmm::map_flags::FILL_NOW);
+    auto stack = ctx->stack(nullptr, memory::user_stack_size, vmm::map_flags::USER | vmm::map_flags::WRITE | vmm::map_flags::READ | vmm::map_flags::FILL_NOW);
 
     auto proc = sched::create_process((char *) "init", 0, (uint64_t) stack, ctx, 3);
-    auto session = frg::construct<sched::session>(memory::mm::heap);
-    auto group = frg::construct<sched::process_group>(memory::mm::heap);
-
-    pid_t sid = 1;
-    pid_t pgid = 1;
-
-    session->sid = sid;
-    session->leader_pgid = pgid;
-
-    group->pgid = pgid;
-    group->leader_pid = proc->pid;
-    group->leader = proc;
-    group->sess = session;
-    group->procs = frg::vector<sched::process *, memory::mm::heap_allocator>();
-
-    group->procs.push(proc);
-    session->groups.push(group);
-
-    proc->group = group;
-    proc->sess = session;
+    auto group = sched::create_process_group(proc);
+    sched::create_session(proc, group);
 
     char *argv[] = { (char *)
-        "/usr/bin/bash", 
+        "/bin/init", 
         NULL 
     };
     char *envp[] = { 
-        (char *) "HOME=/home/racemus", 
+        (char *) "HOME=/home/zag", 
         (char *) "PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin", 
         (char *) "TERM=linux", 
         (char *) "FBDEV=/dev/fb0", 
         NULL 
     };
-    proc->cwd = vfs::tree_root;
+    proc->cwd = vfs::resolve_at("/home/zag", nullptr);
 
-    auto fd = vfs::open(nullptr, "/usr/bin/bash", proc->fds, 0, O_RDWR);
+    auto fd = vfs::open(nullptr, "/bin/init", proc->fds, 0, O_RDWR, 0, 0);
     proc->mem_ctx->swap_in();
     
-    proc->env.load_elf("/usr/bin/bash", fd);
+    proc->env.load_elf("/bin/init", fd);
     proc->env.set_entry();
 
     proc->env.load_params(argv, envp);
-    proc->env.place_params(argv, envp, proc->main_thread);
-
-    auto stdin = vfs::open(nullptr, "/dev/tty0", proc->fds, 0, O_RDONLY);
-    auto stdout = vfs::open(nullptr, "/dev/tty0", proc->fds, 0, O_RDWR);
-    auto stderr = vfs::open(nullptr, "/dev/tty0", proc->fds, 0, O_RDWR);
-
-    auto stdin_fd = vfs::dup(stdin, false, 0);
-    auto stdout_fd = vfs::dup(stdout, false, 1);
-    auto stderr_fd = vfs::dup(stderr, false, 2);
-
-    vfs::close(stdin);
-    vfs::close(stdout);
-    vfs::close(stderr);
-
-    vfs::devfs::dev_priv *private_data = (vfs::devfs::dev_priv *) stdin_fd->desc->node->private_data;
-    tty::device *tty = (tty::device *) private_data->dev;
-
-    session->tty = tty;
+    proc->env.place_params(envp, argv, proc->main_thread);
 
     kmsg(logger, "Trying to run init process, at: %lx", proc->env.entry);
     proc->start();
 }
 
 static void show_splash(vfs::fd_table *table) {
-    auto splash_fd = vfs::open(nullptr, "/home/racemus/hades.bmp", table, 0, O_RDONLY);
+    auto splash_fd = vfs::open(nullptr, "/home/racemus/hades.bmp", table, 0, O_RDONLY, 0, 0);
 
     auto info = frg::construct<vfs::node::statinfo>(memory::mm::heap);
     vfs::stat(nullptr, "/home/racemus/hades.bmp", info, 0);
@@ -148,7 +112,6 @@ static void kern_task() {
     tty::ptmx::init();
     
     auto boot_table = vfs::make_table();
-
     tty::set_active("/dev/tty0", boot_table);
     fb::init(&fbinfo);
 
@@ -177,6 +140,7 @@ extern "C" {
 
         memory::pmm::init(stivale::parser.mmap());
         vmm::init();
+        memory::mm::init();
 
         acpi::madt::init();
 

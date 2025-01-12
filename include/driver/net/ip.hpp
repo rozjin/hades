@@ -7,7 +7,7 @@
 #include <cstdint>
 namespace net {
     constexpr size_t ipv4_alen = 4;
-    inline uint32_t ipv4_atoi(const char *s) {
+    inline uint32_t ipv4_part_parse(const char *s) {
         uint32_t res = 0, idx = 0;
 
         while (s[idx] >= '0' && s[idx] <= '9') {
@@ -17,13 +17,13 @@ namespace net {
         return res;
     }
 
-    inline uint32_t ipv4_aton(const char* ip_str) {
+    inline uint32_t ipv4_pton(const char* ip_str) {
         uint32_t ipv4 = 0;
 
         frg::string_view view(ip_str);
         size_t dot_idx = 0;
         for (uint32_t i = 0; i < 4; i++) {
-            uint32_t part = ipv4_atoi(view.data());
+            uint32_t part = ipv4_part_parse(view.data());
             if (part > 255) {
                 return uint32_t(-1);
             }
@@ -34,10 +34,10 @@ namespace net {
             view = view.sub_string(dot_idx + 1);
         }
 
-        return htonl(ipv4);
+        return ipv4;
     }
 
-    inline char *ipv4_ntoa(uint32_t ipv4, char *ipv4_str) {
+    inline char *ipv4_ntop(uint32_t ipv4, char *ipv4_str) {
         uint8_t bytes[4];
         bytes[0] = ipv4 & 0xFF;
         bytes[1] = (ipv4 >> 8) & 0xFF;
@@ -64,19 +64,20 @@ namespace net {
         return ipv4_str;
     }
 
+    static const char *broadcast_ipv4 = "0.0.0.0";
+
     namespace pkt {
         struct [[gnu::packed]] ipv4 {
-            uint8_t ver : 4;
             uint8_t ihl : 4;
+            uint8_t ver : 4;
 
             uint8_t diff_serv : 6;
             uint8_t ecn  : 2;
 
             uint16_t len;
             uint16_t id;
-            
-            uint8_t flags : 3;
-            uint16_t frag_off : 13;
+
+            uint16_t frag_off;
 
             uint8_t ttl;
             uint8_t proto;
@@ -84,8 +85,6 @@ namespace net {
             
             uint32_t src_ip;
             uint32_t dest_ip;
-
-            uint32_t options[];
         }; 
     }
 }

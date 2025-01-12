@@ -125,7 +125,7 @@ void vt::init(stivale::boot::tags::framebuffer info) {
         NULL, NULL,
         NULL, NULL,
         NULL, 0, 0, 1,
-        0, 0,
+        1, 1,
         0
     );
 

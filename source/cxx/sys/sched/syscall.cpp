@@ -1,5 +1,6 @@
 #include "arch/types.hpp"
 #include "arch/vmm.hpp"
+#include "arch/x86/smp.hpp"
 #include "arch/x86/types.hpp"
 #include <fs/vfs.hpp>
 #include <mm/common.hpp>
@@ -16,6 +17,26 @@ extern "C" {
     extern void x86_sigreturn_exit(arch::irq_regs *r);
 }
 
+static bool has_recursive_access(vfs::node *target, uid_t effective_uid,
+    gid_t effective_gid, uid_t real_uid, gid_t real_gid, mode_t mode, bool use_effective_id) {
+
+    auto current = target;
+    while (current) {
+        if (!current->has_access(effective_uid, effective_gid, X_OK)) {
+            return false;
+        }
+
+        current = current->parent;
+    }
+
+    if (!target->has_access(use_effective_id ? effective_uid : real_uid, use_effective_id ? effective_gid : real_gid, mode)) {
+        return false;
+    }
+
+    return true;
+}
+
+// TODO: execveat
 void syscall_exec(arch::irq_regs *r) {
     char *in_path = (char *) r->rdi;
     char **in_argv = (char **) r->rsi;
@@ -36,8 +57,8 @@ void syscall_exec(arch::irq_regs *r) {
     }
 
     char *path = (char *) kmalloc(strlen(in_path) + 1);
-    char **argv = (char **) kmalloc(sizeof(char *) * argc);
-    char **envp = (char **) kmalloc(sizeof(char *) * envc);
+    char **argv = (char **) kmalloc(sizeof(char *) * (argc + 1));
+    char **envp = (char **) kmalloc(sizeof(char *) * (envc + 1));
     strcpy(path, in_path);
 
     for (size_t i = 0; i < envc; i++) {
@@ -46,15 +67,25 @@ void syscall_exec(arch::irq_regs *r) {
     }
 
     for (size_t i = 0; i < argc; i++) {
-        envp[i] = (char *) kmalloc(strlen(in_argv[i]));
+        argv[i] = (char *) kmalloc(strlen(in_argv[i]));
         strcpy(argv[i], in_argv[i]);
     }    
 
     auto process = arch::get_process();
     auto current_task = arch::get_thread();
-    auto fd = vfs::open(nullptr, path, process->fds, 0, 0);
+
+    auto fd = vfs::open(nullptr, path, process->fds, 0, 0, 0, 0);
     if (!fd) {
         arch::set_errno(EBADF);
+
+        for (size_t i = 0; i < envc; i++) {
+            kfree(envp[i]);
+        }
+
+        for (size_t i = 0; i < argc; i++) {
+            kfree(argv[i]);
+        }    
+
         kfree(path);
         kfree(argv);
         kfree(envp);
@@ -64,24 +95,49 @@ void syscall_exec(arch::irq_regs *r) {
         return;
     }
 
+    auto node = fd->desc->node;
+    if (!node->has_access(process->effective_uid, process->effective_gid, X_OK)) {
+        arch::set_errno(EACCES);
+        r->rax = -1;
+        return;
+    }
+
+	bool is_suid = node->meta->st_mode & S_ISUID ? true : false;
+	bool is_sgid = node->meta->st_mode & S_ISGID ? true : false;
+
     for (size_t i = 0; i < process->threads.size(); i++) {
         auto task = process->threads[i];
         if (task == nullptr) continue;
-        if (task->tid == current_task->tid) continue;
+        if (task->tid == current_task->tid) {
+            process->main_thread = task;
+            continue;
+        };
 
         task->kill();
     }
 
     process->main_thread = current_task;
-    current_task->stop();
 
-    vmm::destroy(process->mem_ctx);
+    x86::cleanup_vmm_ctx(process);
 
     process->mem_ctx = vmm::create();
-    process->mem_ctx->swap_in();
-
+    process->mem_ctx->swap_in(); 
+    current_task->mem_ctx = process->mem_ctx;
+    current_task->ctx.reg.cr3 = x86::get_cr3(process->mem_ctx->get_page_map());
+    
+    current_task->proc->env = sched::process_env{};
+    current_task->proc->env.proc = process;
+ 
     auto res = process->env.load_elf(path, fd);
     if (!res) {
+        for (size_t i = 0; i < envc; i++) {
+            kfree(envp[i]);
+        }
+
+        for (size_t i = 0; i < argc; i++) {
+            kfree(argv[i]);
+        }    
+
         kfree(path);
         kfree(argv);
         kfree(envp);
@@ -90,25 +146,29 @@ void syscall_exec(arch::irq_regs *r) {
         return;
     }
 
-    current_task->ustack = (uint64_t) process->mem_ctx->stack(nullptr, 4 * memory::page_size, vmm::map_flags::USER | vmm::map_flags::WRITE);
+    current_task->ustack = (uint64_t) process->mem_ctx->stack(nullptr, memory::user_stack_size, vmm::map_flags::USER | vmm::map_flags::WRITE | vmm::map_flags::DEMAND);
 
-    current_task->ctx.reg.cr3 = x86::get_cr3(process->mem_ctx->get_page_map());
-    current_task->ctx.reg.rsp = current_task->ustack;
+    arch::init_context(current_task, (void(*)()) process->env.entry, current_task->ustack, 3);
+    current_task->pid = process->pid;
+    current_task->proc = process;
 
-    current_task->ctx.reg.rip = process->env.entry;
-    current_task->ctx.reg.cs = 0x1B;
-    current_task->ctx.reg.ss = 0x23;
-    current_task->ctx.reg.rflags = 0x202;
-
-    current_task->proc->env.load_params(envp, argv);
-    current_task->proc->env.place_params(envp, argv, current_task);
+    process->env.load_params(argv, envp);
+    process->env.place_params(envp, argv, current_task);
 
     for (auto [fd_number, fd]: process->fds->fd_list) {
+        if (fd == nullptr) continue;
         if (fd->flags & O_CLOEXEC) {
             vfs::close(fd);
         }
     }
 
+    process->saved_uid = process->effective_uid;
+    process->saved_gid = process->effective_gid;
+
+    process->effective_uid = is_suid ? node->meta->st_uid : process->effective_uid;
+    process->effective_gid = is_sgid ? node->meta->st_gid : process->effective_gid;
+
+    current_task->in_syscall = false;
     for (size_t i = 0; i < SIGNAL_MAX; i++) {
         sched::signal::sigaction *act = &process->sigactions[i];
         auto handler = act->handler.sa_handler;
@@ -121,9 +181,30 @@ void syscall_exec(arch::irq_regs *r) {
         }
     }
 
-    current_task->cont();
+    for (size_t i = 0; i < envc; i++) {
+        kfree(envp[i]);
+    }
+
+    for (size_t i = 0; i < argc; i++) {
+        kfree(argv[i]);
+    }    
+
+    kfree(path);
+    kfree(argv);
+    kfree(envp);
+
+    current_task->state = sched::thread::READY;
     process->did_exec = true;
-    x86::do_tick();
+
+    x86::get_locals()->ustack = current_task->ustack;
+    auto iretq_regs = arch::sched_to_irq(&current_task->ctx.reg);
+
+    x86::set_fcw(current_task->ctx.reg.fcw);
+    x86::set_mxcsr(current_task->ctx.reg.mxcsr);
+    x86::load_sse(current_task->ctx.sse_region);
+
+    x86::swapgs();
+    x86_sigreturn_exit(&iretq_regs);
 }
 
 void syscall_fork(arch::irq_regs *r) {
@@ -135,7 +216,21 @@ void syscall_fork(arch::irq_regs *r) {
 
 void syscall_exit(arch::irq_regs *r) {
     auto process = arch::get_process();
+    auto task = arch::get_thread();
+
+    x86::get_locals()->task = nullptr;
+    x86::get_locals()->pid = -1;
+
+    task->state = sched::thread::DEAD;
+    task->dispatch_ready = false;
+    task->in_syscall = false;
+
+    sched::threads[task->tid] = (sched::thread *) 0;
+
     process->kill(r->rdi);
+    while (true) {
+        x86::do_tick();
+    }
 }
 
 void syscall_futex(arch::irq_regs *r) {
@@ -173,8 +268,8 @@ void syscall_sleep(arch::irq_regs *r) {
     auto thread = arch::get_thread();
     thread->waitq->set_timer(&req);
 
-    auto waker = thread->waitq->block(arch::get_thread());
-    if (waker == nullptr) {
+    auto [waker, got_signal] = thread->waitq->block(arch::get_thread());
+    if (got_signal) {
         r->rax = req.tv_sec;
         goto finish;
     }
@@ -267,19 +362,51 @@ void syscall_setpgid(arch::irq_regs *r) {
         return;
     }
 
+    if (pgid) {
+        sched::process_group *new_group = nullptr;
+        for (size_t i = 0; i < process->sess->groups.size(); i++) {
+            if (process->sess->groups[i] == nullptr) continue;
+            auto group = process->sess->groups[i];
+            if (group->pgid == pgid) {
+                new_group = group;
+                break;
+            }
+        }
+
+        if (new_group == nullptr) {
+            arch::set_errno(EINVAL);
+            r->rax = -1;
+            return;
+        }
+
+        auto old_group = process->group;
+
+        process->group = new_group;
+        new_group->add_process(process);
+        old_group->remove_process(process);
+
+        if (old_group->process_count == 0) {
+            frg::destruct(memory::mm::heap, old_group);
+            process->sess->remove_group(old_group);
+        }
+    }
+
+    auto old_group = process->group;
+    if (old_group) {
+        old_group->remove_process(process);
+        if (old_group->process_count > 0) {
+            old_group->sess->remove_group(old_group);
+            frg::destruct(memory::mm::heap, old_group);            
+        }
+    }
+
     auto session = process->sess;
-    auto group = frg::construct<sched::process_group>(memory::mm::heap);
+    auto group = sched::create_process_group(process);
 
-    group->pgid = pgid;
-    group->sess = session;
-    group->leader_pid = process->pid;
-    group->leader = process;
-    group->procs = frg::vector<sched::process *, memory::mm::heap_allocator>();
-
-    session->groups.push(group);
-    group->procs.push(process);
-
-    process->group = group;
+    if (session) {
+        group->sess = session;
+        session->groups.push(group);
+    }
 
     r->rax = 0;
 }
@@ -312,27 +439,18 @@ void syscall_setsid(arch::irq_regs *r) {
         return;
     }
 
-    auto session = frg::construct<sched::session>(memory::mm::heap);
-    auto group = frg::construct<sched::process_group>(memory::mm::heap);
+    auto old_group = current_process->group;
+    if (old_group) {
+        old_group->remove_process(current_process);
+        if (old_group->process_count > 0) {
+            old_group->sess->remove_group(old_group);
+            frg::destruct(memory::mm::heap, old_group);            
+        }
+    }
 
-    pid_t sid = current_process->pid;
-    pid_t pgid = current_process->pid;
+    auto group = sched::create_process_group(current_process);
+    sched::create_session(current_process, group);
 
-    session->sid = sid;
-    session->leader_pgid = pgid;
-
-    group->pgid = pgid;
-    group->leader_pid = current_process->pid;
-    group->leader = current_process;
-    group->sess = session;
-    group->procs = frg::vector<sched::process *, memory::mm::heap_allocator>();
-
-    group->procs.push(current_process);
-    session->groups.push(group);
-
-    current_process->sess = session;
-    current_process->group = group;
-    
     r->rax = 0;
 }
 
@@ -360,8 +478,8 @@ void syscall_sigreturn(arch::irq_regs *r) {
     auto regs = &current_task->ucontext.ctx.reg;
     current_task->ctx.reg = *regs;
 
-    current_task->dispatch_signals = false;
-    current_task->release_waitq = true;
+    current_task->dispatch_ready = false;
+    current_task->in_syscall = false;
 
     auto tmp = current_task->kstack;
     current_task->kstack = current_task->sig_kstack;
@@ -482,6 +600,103 @@ void syscall_chdir(arch::irq_regs *r) {
         return;
     }
 
+    if (!has_recursive_access(node, process->effective_uid, process->effective_gid,
+        0, 0, X_OK, true)) {
+        arch::set_errno(EACCES);
+        r->rax = -1;
+        return;
+    }
+
     process->cwd = node;
     r->rax = 0;
+}
+
+// User / Group functions
+
+void syscall_getuid(arch::irq_regs *r) {
+    r->rax = arch::get_process()->real_uid;
+}
+
+void syscall_geteuid(arch::irq_regs *r) {
+    r->rax = arch::get_process()->effective_uid;
+}
+
+void syscall_getgid(arch::irq_regs *r) {
+    r->rax = arch::get_process()->real_gid;
+}
+
+void syscall_getegid(arch::irq_regs *r) {
+    r->rax = arch::get_process()->effective_gid;
+}
+
+void syscall_setuid(arch::irq_regs *r) {
+    uid_t uid = r->rdi;
+
+    auto process = arch::get_process();
+    if (process->effective_uid == 0) {
+        process->real_uid = uid;
+        process->effective_uid = uid;
+        process->saved_uid = uid;
+        r->rax = 0;
+        return;
+    }
+
+    if (process->real_uid == uid || process->effective_uid == uid || process->saved_uid == uid) {
+        process->effective_uid = uid;
+        r->rax = 0;
+        return;
+    }
+
+    arch::set_errno(EPERM);
+    r->rax = -1;
+}
+
+void syscall_seteuid(arch::irq_regs *r) {
+    uid_t euid = r->rdi;
+
+    auto process = arch::get_process();
+    if (process->real_uid == euid || process->effective_uid == euid || process->saved_uid == euid) {
+        process->effective_uid = euid;
+        r->rax = 0;
+        return;
+    }
+
+    arch::set_errno(EPERM);
+    r->rax = -1;
+}
+
+void syscall_setgid(arch::irq_regs *r) {
+    gid_t gid = r->rdi;
+
+    auto process = arch::get_process();
+    if (process->effective_gid == 0) {
+        process->real_gid = gid;
+        process->effective_gid = gid;
+        process->saved_gid = gid;
+        r->rax = 0;
+        return;
+    }
+
+    if (process->real_gid == gid || process->effective_gid == gid || process->saved_gid == gid) {
+        process->effective_gid = gid;
+        r->rax = 0;
+        return;
+    }
+
+    arch::set_errno(EPERM);
+    r->rax = -1;
+}
+
+void syscall_setegid(arch::irq_regs *r) {
+    gid_t egid = r->rdi;
+
+    auto process = arch::get_process();
+    if (process->real_gid == egid || process->effective_gid == egid || process->saved_gid == egid) {
+        process->effective_gid = egid;
+        r->rax = 0;
+        return;
+    }
+
+    arch::set_errno(EPERM);
+    r->rax = -1;
 }

@@ -1,6 +1,8 @@
 #ifndef VMM_HPP
 #define VMM_HPP
 
+#include "mm/common.hpp"
+#include <cstddef>
 #include <stdint.h>
 #include <stddef.h>
 #include <mm/pmm.hpp>
@@ -16,12 +18,6 @@ namespace vmm {
 
     void init();
     vmm_ctx *create();
-
-    void ref_page(uint64_t addr);
-    void ref_page(void *addr);
-
-    void unref_page(uint64_t addr);
-    void unref_page(void *addr);    
 
     class vmm_ctx {
         private:            
@@ -58,6 +54,7 @@ namespace vmm {
 
             hole_tree holes;
 
+            void setup_hole();
             void *create_hole(void *addr, uint64_t len);
             uint8_t delete_hole(void *addr, uint64_t len);
             void split_hole(hole *node, uint64_t offset, size_t len);
@@ -67,7 +64,25 @@ namespace vmm {
                     void *addr = nullptr;
                     uint64_t len = 0;
                     vmm_ctx_map map = nullptr;
-                    page_flags perms;
+
+                    union mapping_perms {
+                        struct {
+                            uint8_t read : 1;
+                            uint8_t write : 1;
+                            uint8_t user : 1;
+                            union {
+                                uint8_t shared: 1;
+                                uint8_t priv: 1;
+                            };
+
+                            uint8_t exec : 1;
+                        };
+
+                        uint64_t number;
+                    };
+
+                    mapping_perms perms;
+                    
                     bool free_pages;
                     frg::rbtree_hook hook;
 
@@ -83,7 +98,7 @@ namespace vmm {
             using mapping_tree = frg::rbtree<mapping, &mapping::hook, mapping_comparator, frg::null_aggregator>;
             mapping_tree mappings;
 
-            void *create_mapping(void *addr, uint64_t len, page_flags flags, bool fill_now);
+            void *create_mapping(void *addr, uint64_t len, map_flags flags, bool fill_now);
             mapping *get_mapping(void *addr);
             void delete_mapping(mapping *node);
 
@@ -96,6 +111,8 @@ namespace vmm {
             void unmap_pages(void *addr, size_t len, bool free_pages);
 
             vmm_ctx_map page_map;
+
+            mapping::mapping_perms flags_to_perms(map_flags flags);
         public:
             util::lock lock;
 
@@ -106,11 +123,13 @@ namespace vmm {
             friend void vmm::init();
             friend vmm_ctx *vmm::create();
 
-            void *map(void *virt, uint64_t len, map_flags flags);
+            void *map(void *virt, uint64_t len, map_flags flags, bool fixed = false);
             void *stack(void *virt, uint64_t len, map_flags flags);
-
-            void *resolve(void *virt);
             void *unmap(void *virt, uint64_t len, bool stack = false);
+            
+            void *resolve(void *virt);
+
+            void modify(void *virt, uint64_t len, map_flags flags);
 
             vmm_ctx *fork();
             vmm_ctx_map get_page_map();

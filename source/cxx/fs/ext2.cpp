@@ -1,5 +1,6 @@
 #include "fs/vfs.hpp"
 #include "mm/mm.hpp"
+#include "util/log/log.hpp"
 #include <cstddef>
 #include <util/types.hpp>
 #include <cstdint>
@@ -13,7 +14,7 @@ void vfs::ext2fs::init_fs(node *root, node *source) {
     this->superblock = (ext2fs::super *) kmalloc(sizeof(ext2fs::super));
     this->devfs = (vfs::devfs *) this->source->get_fs();
 
-    if (devfs->read(source, superblock, sizeof(ext2fs::super), 1024) == -1) {
+    if (devfs->read(source, superblock, sizeof(ext2fs::super), 1024) < 0) {
         kmsg(logger, "superblock: read error");
         kfree(superblock);
         return;
@@ -28,15 +29,15 @@ void vfs::ext2fs::init_fs(node *root, node *source) {
     frag_size = 1024 << superblock->frag_size;
     bgd_count = util::ceil(superblock->block_count, superblock->blocks_per_group);
 
-    kmsg(logger, 
+    kmsg(logger,
         "ext2fs: inode count: %u, block count: %u, blocks per group: %u, block size: %u, bgd count: %u",
-            
+
             superblock->inode_count,
             superblock->block_count,
             superblock->blocks_per_group,
             block_size,
             bgd_count);
-    
+
     ext2fs::inode inode;
     if (read_inode_entry(&inode, 2) == -1) {
         kmsg(logger, "error reading root inode");
@@ -47,9 +48,16 @@ void vfs::ext2fs::init_fs(node *root, node *source) {
     root->inum = 2;
     root->meta->st_ino = 2;
 
-    ext2fs::inode root_inode;
-    read_inode_entry(&root_inode, root->inum);
-    read_dirents(&root_inode, (ext2fs::ext2_private **) (&root->private_data));
+    root->meta->st_uid = inode.uid;
+    root->meta->st_gid = inode.gid;
+    root->meta->st_size = read_inode_size(&inode);
+    root->meta->st_mode = S_IFDIR | S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH;
+    root->meta->st_blksize = block_size;
+    root->meta->st_blkcnt = util::ceil(root->meta->st_size, root->meta->st_blksize);
+    root->meta->st_ino = 2;
+    root->meta->st_nlink = 1;
+
+    read_dirents(&inode, (ext2fs::ext2_private **) (&root->private_data));
 }
 
 vfs::node *vfs::ext2fs::lookup(node *parent, frg::string_view name) {
@@ -78,35 +86,49 @@ vfs::node *vfs::ext2fs::lookup(node *parent, frg::string_view name) {
             continue;
         }
 
-        int dir_type;
+        int node_type;
+        mode_t node_mode = inode.permissions & 0xFFF;
         switch (file->dent->dir_type) {
-            case node::type::FILE:
-                dir_type = 1;
+            case 1:
+                node_type = node::type::FILE;
+                node_mode |= S_IFREG;
                 break;
-            case node::type::DIRECTORY:
-                dir_type = 2;
+            case 2:
+                node_type = node::type::DIRECTORY;
+                node_mode |= S_IFDIR;
                 break;
-            case node::type::BLOCKDEV:
-                dir_type = 4;
+            case 3:
+                node_type = node::type::CHARDEV;
+                node_mode |= S_IFCHR;
                 break;
-            case node::type::CHARDEV:
-                dir_type = 3;
+            case 4:
+                node_type = node::type::BLOCKDEV;
+                node_mode |= S_IFBLK;
                 break;
-            case node::type::SOCKET:
-                dir_type = 6;
+            case 5:
+                kmsg(logger, "FIFOs are unimplemented");
+
+                node_type = node::type::FILE;
+                node_mode |= S_IFREG;
                 break;
-            case node::type::SYMLINK:
-                dir_type = 7;
+            case 6:
+                node_type = node::type::SOCKET;
+                node_mode |= S_IFSOCK;
+                break;
+            case 7:
+                node_type = node::type::SYMLINK;
+                node_mode |= S_IFLNK;
                 break;
             default:
-                dir_type = 0;
+                kmsg(logger, log::level::WARN, "unknown dirent type %d on %s", file->dent->dir_type, file->name);
+                node_type = node::type::FILE;
+                node_mode |= S_IFREG;
+
                 break;
         }
 
-        // filesystem *fs, path name, node *parent, ssize_t flags, ssize_t type, ssize_t inum = -1
-
         auto inode_index = file->dent->inode_index;
-        auto node = frg::construct<vfs::node>(memory::mm::heap, this, name, parent, 0, dir_type, inode_index);
+        auto node = frg::construct<vfs::node>(memory::mm::heap, this, name, parent, 0, node_type, inode_index);
         auto meta = frg::construct<vfs::node::statinfo>(memory::mm::heap);
 
         node->meta = meta;
@@ -115,14 +137,15 @@ vfs::node *vfs::ext2fs::lookup(node *parent, frg::string_view name) {
         meta->st_uid = inode.uid;
         meta->st_gid = inode.gid;
         meta->st_size = read_inode_size(&inode);
+        meta->st_mode = node_mode;
         meta->st_blksize = block_size;
-        meta->st_blocks = util::ceil(meta->st_size, meta->st_blksize);
+        meta->st_blkcnt = util::ceil(meta->st_size, meta->st_blksize);
         meta->st_ino = file->dent->inode_index;
         meta->st_nlink = 1;
 
         parent->children.push_back(node);
 
-        /*        
+        /*
         if (node->type == node::type::SYMLINK) {
             if (read_symlink(&inode, (char **) (&node)))
         }
@@ -155,35 +178,51 @@ ssize_t vfs::ext2fs::readdir(node *dir) {
             return -1;
         }
 
-        int dir_type;
+        int node_type;
+        mode_t node_mode = inode.permissions & 0xFFF;
         switch (file->dent->dir_type) {
-            case node::type::FILE:
-                dir_type = 1;
+            case 1:
+                node_type = node::type::FILE;
+                node_mode |= S_IFREG;
                 break;
-            case node::type::DIRECTORY:
-                dir_type = 2;
+            case 2:
+                node_type = node::type::DIRECTORY;
+                node_mode |= S_IFDIR;
                 break;
-            case node::type::BLOCKDEV:
-                dir_type = 4;
+            case 3:
+                node_type = node::type::CHARDEV;
+                node_mode |= S_IFCHR;
                 break;
-            case node::type::CHARDEV:
-                dir_type = 3;
+            case 4:
+                node_type = node::type::BLOCKDEV;
+                node_mode |= S_IFBLK;
                 break;
-            case node::type::SOCKET:
-                dir_type = 6;
+            case 5:
+                kmsg(logger, "FIFOs are unimplemented");
+
+                node_type = node::type::FILE;
+                node_mode |= S_IFREG;
                 break;
-            case node::type::SYMLINK:
-                dir_type = 7;
+            case 6:
+                node_type = node::type::SOCKET;
+                node_mode |= S_IFSOCK;
+                break;
+            case 7:
+                node_type = node::type::SYMLINK;
+                node_mode |= S_IFLNK;
                 break;
             default:
-                dir_type = 0;
+                kmsg(logger, log::level::WARN, "unknown dirent type %d on %s", file->dent->dir_type, file->name);
+                node_type = node::type::FILE;
+                node_mode |= S_IFREG;
+
                 break;
         }
 
         // filesystem *fs, path name, node *parent, ssize_t flags, ssize_t type, ssize_t inum = -1
 
         auto inode_index = file->dent->inode_index;
-        auto node = frg::construct<vfs::node>(memory::mm::heap, this, file->name, dir, 0, dir_type, inode_index);
+        auto node = frg::construct<vfs::node>(memory::mm::heap, this, file->name, dir, 0, node_type, inode_index);
         auto meta = frg::construct<vfs::node::statinfo>(memory::mm::heap);
 
         node->meta = meta;
@@ -191,15 +230,16 @@ ssize_t vfs::ext2fs::readdir(node *dir) {
 
         meta->st_uid = inode.uid;
         meta->st_gid = inode.gid;
+        meta->st_mode = node_mode;
         meta->st_size = read_inode_size(&inode);
         meta->st_blksize = block_size;
-        meta->st_blocks = util::ceil(meta->st_size, meta->st_blksize);
+        meta->st_blkcnt = util::ceil(meta->st_size, meta->st_blksize);
         meta->st_ino = file->dent->inode_index;
         meta->st_nlink = 1;
 
         dir->children.push_back(node);
 
-        /*        
+        /*
         if (node->type == node::type::SYMLINK) {
             if (read_symlink(&inode, (char **) (&node)))
         }
@@ -276,33 +316,40 @@ ssize_t vfs::ext2fs::truncate(node *file, off_t offset) {
     return 0;
 }
 
-ssize_t vfs::ext2fs::create(node *dst, path name, int64_t type, int64_t flags) {
+ssize_t vfs::ext2fs::create(node *dst, path name, int64_t type, int64_t flags, mode_t mode,
+    uid_t uid, gid_t gid) {
     ext2fs::inode parent_inode;
     if (read_inode_entry(&parent_inode, dst->inum) == -1) {
         return -1;
     }
 
     int inum = allocate_inode();
-
     int dir_type;
+    int inode_type;
     switch (type) {
         case node::type::FILE:
             dir_type = 1;
+            inode_type = S_IFREG;
             break;
         case node::type::DIRECTORY:
             dir_type = 2;
+            inode_type = S_IFDIR;
             break;
         case node::type::BLOCKDEV:
             dir_type = 4;
+            inode_type = S_IFBLK;
             break;
         case node::type::CHARDEV:
             dir_type = 3;
+            inode_type = S_IFCHR;
             break;
         case node::type::SOCKET:
             dir_type = 6;
+            inode_type = S_IFSOCK;
             break;
         case node::type::SYMLINK:
             dir_type = 7;
+            inode_type = S_IFLNK;
             break;
         default:
             dir_type = 0;
@@ -313,14 +360,25 @@ ssize_t vfs::ext2fs::create(node *dst, path name, int64_t type, int64_t flags) {
         return -1;
     }
 
+    ext2fs::inode inode;
+
+    inode.permissions = inode_type | mode;
+    inode.uid = uid;
+    inode.gid = gid;
+
+    if (write_inode_entry(&inode, inum) == -1) {
+        return -1;
+    }
+
     auto node = frg::construct<vfs::node>(memory::mm::heap, this, name, dst, flags, type, inum);
     auto meta = frg::construct<vfs::node::statinfo>(memory::mm::heap);
 
     meta->st_ino = inum;
     meta->st_uid = parent_inode.uid;
     meta->st_gid = parent_inode.gid;
+    meta->st_mode = inode_type | mode;
     meta->st_size = 0;
-    meta->st_blocks = 0;
+    meta->st_blkcnt = 0;
     meta->st_blksize = block_size;
 
     node->meta = meta;
@@ -330,7 +388,8 @@ ssize_t vfs::ext2fs::create(node *dst, path name, int64_t type, int64_t flags) {
     return 0;
 }
 
-ssize_t vfs::ext2fs::mkdir(node *dst, frg::string_view name, int64_t flags) {
+ssize_t vfs::ext2fs::mkdir(node *dst, frg::string_view name, int64_t flags, mode_t mode,
+    uid_t uid, gid_t gid) {
     ext2fs::inode parent_inode;
     if (read_inode_entry(&parent_inode, dst->inum) == -1) {
         return -1;
@@ -338,8 +397,19 @@ ssize_t vfs::ext2fs::mkdir(node *dst, frg::string_view name, int64_t flags) {
 
     int inum = allocate_inode();
     int dir_type = 2;
+    int inode_type = S_IFDIR;
 
     if (write_dirent(&parent_inode, dst->inum, name.data(), inum, dir_type) == -1) {
+        return -1;
+    }
+
+    ext2fs::inode inode;
+
+    inode.permissions = inode_type | mode;
+    inode.uid = uid;
+    inode.gid = gid;
+
+    if (write_inode_entry(&inode, inum) == -1) {
         return -1;
     }
 
@@ -349,8 +419,9 @@ ssize_t vfs::ext2fs::mkdir(node *dst, frg::string_view name, int64_t flags) {
     meta->st_ino = inum;
     meta->st_uid = parent_inode.uid;
     meta->st_gid = parent_inode.gid;
+    meta->st_mode = S_IFDIR | mode;
     meta->st_size = 0;
-    meta->st_blocks = 0;
+    meta->st_blkcnt = 0;
     meta->st_blksize = block_size;
 
     node->meta = meta;
@@ -565,7 +636,7 @@ int vfs::ext2fs::inode_set_block(inode *inode, int index, uint32_t iblock, uint3
                 }
             }
 
-            if (devfs->read(source, &double_indirect_block, sizeof(double_indirect_block), 
+            if (devfs->read(source, &double_indirect_block, sizeof(double_indirect_block),
                 inode->blocks[14] * block_size + double_indirect_block_index * 4) < 0) {
                 kmsg(logger, "read error");
             }
@@ -581,7 +652,7 @@ int vfs::ext2fs::inode_set_block(inode *inode, int index, uint32_t iblock, uint3
                 }
             }
 
-            if (devfs->read(source, &indirect_block, sizeof(indirect_block), 
+            if (devfs->read(source, &indirect_block, sizeof(indirect_block),
                 double_indirect_block_index * block_size + double_indirect_block * 4) < 0) {
                 kmsg(logger, "read error");
             }
@@ -599,7 +670,7 @@ int vfs::ext2fs::inode_set_block(inode *inode, int index, uint32_t iblock, uint3
             }
 
             if (devfs->write(source, &block, sizeof(block),
-                indirect_block * block_size + double_indirect_block_offset * 4) == -1) {
+                indirect_block * block_size + double_indirect_block_offset * 4) < 0) {
                 kmsg(logger, "write error");
             }
 
@@ -617,7 +688,7 @@ int vfs::ext2fs::inode_set_block(inode *inode, int index, uint32_t iblock, uint3
         }
 
         if (devfs->read(source, &indirect_block, sizeof(indirect_block),
-            inode->blocks[13] * block_size + indirect_block_index * 4) == -1) {
+            inode->blocks[13] * block_size + indirect_block_index * 4) < 0) {
             kmsg(logger, "read error");
             return -1;
         }
@@ -628,14 +699,14 @@ int vfs::ext2fs::inode_set_block(inode *inode, int index, uint32_t iblock, uint3
             }
 
             if (devfs->write(source, &indirect_block, sizeof(indirect_block),
-                inode->blocks[13] * block_size + indirect_block_index * 4) == -1) {
+                inode->blocks[13] * block_size + indirect_block_index * 4) < 0) {
                 kmsg(logger, "write error");
                 return -1;
             }
         }
 
         if (devfs->write(source, &block, sizeof(block),
-            indirect_block * block_size + indirect_block_offset * 4) == -1) {
+            indirect_block * block_size + indirect_block_offset * 4) < 0) {
             kmsg(logger, "write error");
             return -1;
         }
@@ -653,7 +724,7 @@ int vfs::ext2fs::inode_set_block(inode *inode, int index, uint32_t iblock, uint3
         }
 
         if (devfs->write(source, &block, sizeof(block),
-            inode->blocks[12] * blocks_per_level + iblock * 4) == -1) {
+            inode->blocks[12] * blocks_per_level + iblock * 4) < 0) {
             kmsg(logger, "write error");
             return -1;
         }
@@ -687,22 +758,22 @@ int vfs::ext2fs::inode_get_block(inode *inode, uint32_t iblock, uint32_t *res) {
             uint32_t double_indirect_block = 0;
 
             if (devfs->read(source, &double_indirect_block, sizeof(double_indirect_block),
-                inode->blocks[14] * block_size + double_indirect_block_index * 4) == -1) {
+                inode->blocks[14] * block_size + double_indirect_block_index * 4) < 0) {
                 kmsg(logger, "read error");
             }
 
             if (!double_indirect_block) return -1;
-            
+
             if (devfs->read(source, &indirect_block, sizeof(indirect_block),
-                double_indirect_block_index * block_size + double_indirect_block * 4) == -1) {
+                double_indirect_block_index * block_size + double_indirect_block * 4) < 0) {
                 kmsg(logger, "read error");
                 return -1;
             }
-            
+
             if (!indirect_block) return -2;
 
             if (devfs->read(source, &block, sizeof(block),
-                indirect_block * block_size + double_indirect_block_offset * 4) == -1) {
+                indirect_block * block_size + double_indirect_block_offset * 4) < 0) {
                 kmsg(logger, "read error");
             }
 
@@ -711,7 +782,7 @@ int vfs::ext2fs::inode_get_block(inode *inode, uint32_t iblock, uint32_t *res) {
         }
 
         if (devfs->read(source, &indirect_block, sizeof(indirect_block),
-            inode->blocks[13] * block_size + indirect_block_index * 4) == -1) {
+            inode->blocks[13] * block_size + indirect_block_index * 4) < 0) {
             kmsg(logger, "read error");
             return -1;
         }
@@ -719,7 +790,7 @@ int vfs::ext2fs::inode_get_block(inode *inode, uint32_t iblock, uint32_t *res) {
         if (!indirect_block) return -2;
 
         if (devfs->read(source, &block, sizeof(block),
-            indirect_block * block_size + indirect_block_offset * 4) == -1) {
+            indirect_block * block_size + indirect_block_offset * 4) < 0) {
             kmsg(logger, "read error");
             return -1;
         }
@@ -729,7 +800,7 @@ int vfs::ext2fs::inode_get_block(inode *inode, uint32_t iblock, uint32_t *res) {
     }
 
     if (devfs->read(source, &block, sizeof(block),
-        inode->blocks[12] * block_size + iblock * 4) == -1) {
+        inode->blocks[12] * block_size + iblock * 4) < 0) {
         kmsg(logger, "read error");
         return -1;
     }
@@ -748,7 +819,7 @@ int vfs::ext2fs::free_block(uint32_t block) {
     }
 
     uint8_t *bitmap = (uint8_t *) kmalloc(block_size);
-    if (devfs->read(source, bitmap, block_size, bgd.block_addr_bitmap * block_size) == -1) {
+    if (devfs->read(source, bitmap, block_size, bgd.block_addr_bitmap * block_size) < 0) {
         kmsg(logger, "read error");
 
         kfree(bitmap);
@@ -761,7 +832,7 @@ int vfs::ext2fs::free_block(uint32_t block) {
     }
 
     util::bit_clear(bitmap, bitmap_index);
-    if (devfs->write(source, bitmap, block_size, bgd.block_addr_bitmap * block_size) == -1) {
+    if (devfs->write(source, bitmap, block_size, bgd.block_addr_bitmap * block_size) < 0) {
         kmsg(logger, "write error");
 
         kfree(bitmap);
@@ -788,7 +859,7 @@ int vfs::ext2fs::free_inode(uint32_t inode) {
     }
 
     uint8_t *bitmap = (uint8_t *) kmalloc(block_size);
-    if (devfs->read(source, bitmap, block_size, bgd.block_addr_inode * block_size) == -1) {
+    if (devfs->read(source, bitmap, block_size, bgd.block_addr_inode * block_size) < 0) {
         kmsg(logger, "read error");
 
         kfree(bitmap);
@@ -801,7 +872,7 @@ int vfs::ext2fs::free_inode(uint32_t inode) {
     }
 
     util::bit_clear(bitmap, bitmap_index);
-    if (devfs->write(source, bitmap, block_size, bgd.block_addr_inode * block_size) == -1) {
+    if (devfs->write(source, bitmap, block_size, bgd.block_addr_inode * block_size) < 0) {
         kmsg(logger, "write error");
 
         kfree(bitmap);
@@ -820,7 +891,7 @@ int vfs::ext2fs::free_inode(uint32_t inode) {
 
 int vfs::ext2fs::allocate_block() {
     ext2fs::bgd bgd;
-    
+
     for (size_t i = 0; i < bgd_count; i++) {
         if (read_bgd(&bgd, i) == -1) {
             return -1;
@@ -839,7 +910,7 @@ int vfs::ext2fs::allocate_block() {
 
 int vfs::ext2fs::allocate_inode() {
     ext2fs::bgd bgd;
-    
+
     for (size_t i = 0; i < bgd_count; i++) {
         if (read_bgd(&bgd, i) == -1) {
             return -1;
@@ -862,7 +933,7 @@ int vfs::ext2fs::bgd_allocate_inode(bgd *bgd, int bgd_index) {
     }
 
     uint8_t *bitmap = (uint8_t *) kmalloc(block_size);
-    if (devfs->read(source, bitmap, block_size, bgd->block_addr_inode * block_size) == -1) {
+    if (devfs->read(source, bitmap, block_size, bgd->block_addr_inode * block_size) < 0) {
         kmsg(logger, "read error");
         kfree(bitmap);
         return -1;
@@ -872,7 +943,7 @@ int vfs::ext2fs::bgd_allocate_inode(bgd *bgd, int bgd_index) {
         if (!util::bit_test(bitmap, i)) {
             util::bit_set(bitmap, i);
 
-            if (devfs->write(source, bitmap, block_size, bgd->block_addr_inode * block_size) == -1) {
+            if (devfs->write(source, bitmap, block_size, bgd->block_addr_inode * block_size) < 0) {
                 kmsg(logger, "write error");
                 kfree(bitmap);
                 return -1;
@@ -881,13 +952,13 @@ int vfs::ext2fs::bgd_allocate_inode(bgd *bgd, int bgd_index) {
             bgd->unallocated_inodes--;
             if (write_bgd(bgd, bgd_index) == -1) {
                 kfree(bitmap);
-                return -1;            
+                return -1;
             }
 
-            if (devfs->write(source, bitmap, block_size, bgd->block_addr_inode * block_size) == -1) {
+            if (devfs->write(source, bitmap, block_size, bgd->block_addr_inode * block_size) < 0) {
                 kmsg(logger, "write error");
                 kfree(bitmap);
-                return -1;                
+                return -1;
             }
 
             kfree(bitmap);
@@ -905,7 +976,7 @@ int vfs::ext2fs::bgd_allocate_block(bgd *bgd, int bgd_index) {
     }
 
     uint8_t *bitmap = (uint8_t *) kmalloc(block_size);
-    if (devfs->read(source, bitmap, block_size, bgd->block_addr_bitmap * block_size) == -1) {
+    if (devfs->read(source, bitmap, block_size, bgd->block_addr_bitmap * block_size) < 0) {
         kmsg(logger, "read error");
         kfree(bitmap);
         return -1;
@@ -915,7 +986,7 @@ int vfs::ext2fs::bgd_allocate_block(bgd *bgd, int bgd_index) {
         if (!util::bit_test(bitmap, i)) {
             util::bit_set(bitmap, i);
 
-            if (devfs->write(source, bitmap, block_size, bgd->block_addr_bitmap * block_size) == -1) {
+            if (devfs->write(source, bitmap, block_size, bgd->block_addr_bitmap * block_size) < 0) {
                 kmsg(logger, "write error");
                 kfree(bitmap);
                 return -1;
@@ -924,13 +995,13 @@ int vfs::ext2fs::bgd_allocate_block(bgd *bgd, int bgd_index) {
             bgd->unallocated_blocks--;
             if (write_bgd(bgd, bgd_index) == -1) {
                 kfree(bitmap);
-                return -1;            
+                return -1;
             }
 
-            if (devfs->write(source, bitmap, block_size, bgd->block_addr_bitmap * block_size) == -1) {
+            if (devfs->write(source, bitmap, block_size, bgd->block_addr_bitmap * block_size) < 0) {
                 kmsg(logger, "write error");
                 kfree(bitmap);
-                return -1;                
+                return -1;
             }
 
             kfree(bitmap);
@@ -951,7 +1022,7 @@ int vfs::ext2fs::read_inode_entry(inode *inode, int index) {
         return -1;
     }
 
-    if (devfs->read(source, inode, sizeof(ext2fs::inode), 
+    if (devfs->read(source, inode, sizeof(ext2fs::inode),
         bgd.inode_table_block * block_size + superblock->inode_size * table_index) == -1) {
         kmsg(logger, "read error");
         return -1;
@@ -969,7 +1040,7 @@ int vfs::ext2fs::write_inode_entry(inode *inode, int index) {
         return -1;
     }
 
-    if (devfs->write(source, inode, sizeof(ext2fs::inode), 
+    if (devfs->write(source, inode, sizeof(ext2fs::inode),
         bgd.inode_table_block * block_size + superblock->inode_size * table_index) == -1) {
         kmsg(logger, "read error");
         return -1;

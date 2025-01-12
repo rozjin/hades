@@ -54,13 +54,11 @@ namespace x86 {
     };
 
     constexpr size_t initialStackSize = 16;
-    constexpr size_t fsBase = 0xC0000100;
-    constexpr size_t gsBase = 0xC0000101;
 
     struct [[gnu::packed]] processor {
         uintptr_t kstack;
         uintptr_t ustack;
-        int errno;
+        uint64_t errno;
 
         size_t processor_id;
 

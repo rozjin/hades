@@ -107,6 +107,10 @@ arch::sched_regs x86::irq_to_sched(arch::irq_regs *regs) {
     };
 }
 
+bool arch::is_user(sched_regs *regs) {
+    return (regs->cs & 0x3);
+}
+
 void x86::stall_cpu() {
     while (true) {
         asm volatile("pause");

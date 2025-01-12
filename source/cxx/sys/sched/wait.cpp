@@ -1,33 +1,33 @@
 
+#include <arch/types.hpp>
 #include <cstddef>
 #include <mm/mm.hpp>
 #include <sys/sched/wait.hpp>
 #include <sys/sched/time.hpp>
 #include <sys/sched/sched.hpp>
 
-sched::thread *ipc::queue::block(sched::thread *waiter) {
+frg::tuple<sched::thread *, bool> ipc::queue::block(sched::thread *waiter) {
     lock.irq_acquire();
     waiters.push_back(waiter);
     lock.irq_release();
 
-    if (waiter->proc) {
-        waiter->proc->sig_ctx.active = true;
-    }
+    bool irqs_enabled = arch::get_irq_state();
 
     waiter->state = sched::thread::BLOCKED;
-    while (waiter->state == sched::thread::BLOCKED) arch::tick();
+    while (waiter->state == sched::thread::BLOCKED && !waiter->pending_signal) arch::tick();
 
-    if (waiter->proc) {
-        waiter->proc->sig_ctx.active = false;
+    if (irqs_enabled) {
+        arch::irq_on();
+    } else {
+        arch::irq_off();
     }
-    
-    if (waiter->release_waitq) {
-        waiter->release_waitq = false;
+
+    if (waiter->pending_signal) {
         arch::set_errno(EINTR);
-        return nullptr;
+        return {nullptr, true};
     }
 
-    return last_waker;
+    return {last_waker, false};
 }
 
 void ipc::queue::set_timer(sched::timespec *time) {
@@ -55,9 +55,12 @@ void ipc::trigger::remove(queue *waitq) {
         if (queue == nullptr) continue;
         if (queue == waitq) {
             queues[i] = nullptr;
+            lock.irq_release();
+
             return;
         }
     }
+
     lock.irq_release();
 }
 

@@ -358,24 +358,8 @@ ahci::command_slot ahci::device::issue_read_write(void *buf, uint16_t count, siz
     return slot;
 }
 
-ssize_t ahci::device::read(void *buf, size_t count, size_t offset) {
-    lock.acquire();
-
-    uint64_t sector_offset = offset % sector_size;
-    uint64_t sector_start = offset / sector_size;
-    uint64_t sector_end = ((offset + count) + sector_size - 1) / sector_size;
-    uint64_t sector_count = sector_end - sector_start;
-
-    if (sector_count > 0xFFFF) {
-        lock.release();
-        return -EIO;
-    } else if (sector_count == 0) {
-        lock.release();
-        return -EIO;
-    }
-
-    void *tmp = kmalloc(sector_count * sector_size);
-    auto slot = issue_read_write(tmp, sector_count, sector_start, false);
+ssize_t ahci::device::do_sector_io(void *buf, uint16_t count, size_t offset, bool rw) {
+    auto slot = issue_read_write(buf, count, offset, false);
     await_ready(port);
 
     issue_command(port, slot.idx);
@@ -388,21 +372,82 @@ ssize_t ahci::device::read(void *buf, size_t count, size_t offset) {
         reset_engine(port);
         free_command(slot.entry);
 
+        lock.irq_release();
+        return -1;
+    }
+
+    free_command(slot.entry);
+    return 0;
+}
+
+ssize_t ahci::device::read(void *buf, size_t count, size_t offset) {
+    uint64_t sector_offset = offset % sector_size;
+    uint64_t sector_start = offset / sector_size;
+    uint64_t sector_end = ((offset + count) + sector_size - 1) / sector_size;
+    uint64_t sector_count = sector_end - sector_start;
+
+    if (sector_count > 0xFFFF) {
+        return -EIO;
+    } else if (sector_count == 0) {
+        return -EIO;
+    }
+
+    void *tmp = kmalloc(sector_count * sector_size);
+
+    lock.irq_acquire();
+    auto err = do_sector_io(tmp, sector_count, sector_start, false);
+    if (err) {
         kfree(tmp);
         lock.irq_release();
         return -EIO;
     }
 
-    free_command(slot.entry);
     memcpy(buf, (char *) tmp + sector_offset, count);
-
     kfree(tmp);
-    lock.release();
+    lock.irq_release();
     return count;
 }
 
 ssize_t ahci::device::write(void *buf, size_t count, size_t offset) {
-    return -1;
+    uint64_t sector_offset = offset % sector_size;
+    uint64_t sector_start = offset / sector_size;
+    uint64_t sector_end = ((offset + count) + sector_size - 1) / sector_size;
+    uint64_t sector_count = sector_end - sector_start;
+
+    if (sector_count > 0xFFFF) {
+        return -EIO;
+    } else if (sector_count == 0) {
+        return -EIO;
+    }
+
+    void *tmp = kmalloc(sector_count * sector_size);
+
+    lock.irq_acquire();
+    auto err = do_sector_io(tmp, 1, sector_start, 0);    
+    if (err) {
+        kfree(tmp);
+        lock.irq_release();
+        return -EIO;        
+    }
+
+    err = do_sector_io(tmp, 1, sector_end - 1, false);
+    if (err) {
+        kfree(tmp);
+        lock.irq_release();
+        return -EIO;        
+    }
+
+    memcpy((char *) tmp + sector_offset, buf, count);
+    err = do_sector_io(tmp, sector_count, sector_start, true);
+    if (err) {
+        kfree(tmp);
+        lock.irq_release();
+        return -EIO;        
+    }
+
+    kfree(tmp);
+    lock.irq_release();
+    return count;
 }
 
 static frg::vector<ahci::device *, memory::mm::heap_allocator> devices{};

@@ -81,6 +81,7 @@ namespace vfs {
                 uint32_t eab;
                 uint32_t size32h;
                 uint32_t frag_addr;
+                char oss2[12];
             };
 
             struct [[gnu::packed]] dirent {
@@ -156,8 +157,10 @@ namespace vfs {
             ssize_t write(node *file, void *buf, size_t len, off_t offset) override;
             ssize_t truncate(node *file, off_t offset) override;
 
-            ssize_t create(node *dst, path name, int64_t type, int64_t flags) override;
-            ssize_t mkdir(node *dst, frg::string_view name, int64_t flags) override;
+            ssize_t create(node *dst, path name, int64_t type, int64_t flags, mode_t mode,
+                uid_t uid, gid_t gid) override;
+            ssize_t mkdir(node *dst, frg::string_view name, int64_t flags, mode_t mode,
+                uid_t uid, gid_t gid) override;
 
             //ssize_t remove(node *dst) override;
             ssize_t unlink(node *dst) override;

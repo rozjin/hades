@@ -13,6 +13,8 @@ namespace memory {
     constexpr size_t page_size = 0x1000;
     constexpr size_t page_large = 0x200000;
 
+    constexpr size_t user_stack_size = page_size * 256;
+
     inline size_t page_round(size_t size) {
         if ((size % page_size) != 0) {
             return ((size / page_size) * page_size) + page_size;

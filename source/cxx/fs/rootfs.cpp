@@ -1,3 +1,4 @@
+#include "util/types.hpp"
 #include <cstddef>
 #include <frg/allocation.hpp>
 #include <fs/vfs.hpp>
@@ -40,20 +41,32 @@ ssize_t vfs::rootfs::read(node *file, void *buf, size_t len, off_t offset) {
     }
 }
 
-ssize_t vfs::rootfs::create(node *dst, path name, int64_t type, int64_t flags) {
+ssize_t vfs::rootfs::create(node *dst, path name, int64_t type, int64_t flags, mode_t mode,
+    uid_t uid, gid_t gid) {
     auto storage = frg::construct<rootfs::storage>(memory::mm::heap);
     storage->buf = kmalloc(memory::page_size);
     storage->length = memory::page_size;
 
     node *new_file = frg::construct<vfs::node>(memory::mm::heap, this, name, dst, flags, type);
+
+    new_file->meta->st_uid = uid;
+    new_file->meta->st_gid = gid;
+    new_file->meta->st_mode = mode | S_IFREG;
+
     new_file->private_data = (void *) storage;
     dst->children.push_back(new_file);
 
     return 0;
 }
 
-ssize_t vfs::rootfs::mkdir(node *dst, frg::string_view name, int64_t flags) {
+ssize_t vfs::rootfs::mkdir(node *dst, frg::string_view name, int64_t flags, mode_t mode,
+    uid_t uid, gid_t gid) {
     node *new_dir = frg::construct<vfs::node>(memory::mm::heap, this, name, dst, flags, node::type::DIRECTORY);
+
+    new_dir->meta->st_uid = uid;
+    new_dir->meta->st_gid = gid;
+    new_dir->meta->st_mode = mode | S_IFDIR;
+
     dst->children.push_back(new_dir);
 
     return 0;

@@ -54,7 +54,7 @@ bool init_symbols(elf::file *file) {
     elf::elf64_symtab *symtab = (elf::elf64_symtab *) file->symtab;
 
     for (size_t i = 0; i < ents; i++) {
-        if (!(symtab[i].st_info & STT_FUNC)) {
+        if ((symtab[i].st_info & STT_FUNC) != STT_FUNC) {
             continue;
         }
 
@@ -198,6 +198,8 @@ void elf::file::load() {
         }
 
         elf64_phdr *phdr = &this->phdrs[i];
+        uint64_t base = phdr->p_vaddr + load_offset ;
+
         size_t misalign = phdr->p_vaddr & (memory::page_size - 1);
         size_t pages = util::ceil(misalign + phdr->p_memsz, memory::page_size);
 
@@ -205,13 +207,13 @@ void elf::file::load() {
             pages = pages + 1;
         }
 
-        vmm::map_flags flags = vmm::map_flags::PRESENT | vmm::map_flags::USER | vmm::map_flags::FIXED | vmm::map_flags::FILL_NOW;
+        vmm::map_flags flags = vmm::map_flags::READ | vmm::map_flags::USER | vmm::map_flags::FILL_NOW;
         if (phdr->p_flags & ELF_PF_W) flags |= vmm::map_flags::WRITE;
 
-        ctx->map((void *)(phdr->p_vaddr + load_offset - misalign), pages * memory::page_size, flags);
+        ctx->map((void *)(base - misalign), pages * memory::page_size, flags, true);
 
         vfs::lseek(fd, phdr->p_offset, SEEK_SET);
-        vfs::read(fd, (void *)(phdr->p_vaddr + load_offset), phdr->p_filesz);
+        vfs::read(fd, (void *) base, phdr->p_filesz);
     }
 }
 

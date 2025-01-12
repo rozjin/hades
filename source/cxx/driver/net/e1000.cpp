@@ -1,7 +1,7 @@
 #include "arch/types.hpp"
-#include "driver/net/arp.hpp"
 #include "driver/net/ip.hpp"
 #include "driver/net/types.hpp"
+#include <driver/net/protos.hpp>
 #include "lai/helpers/pci.h"
 #include "mm/pmm.hpp"
 #include "sys/pci.hpp"
@@ -15,7 +15,6 @@
 #include <driver/net/e1000.hpp>
 
 static log::subsystem logger = log::make_subsystem("E1000");
-log::subsystem netlog = log::make_subsystem("NET");
 
 e1000::device *net_dev;
 void e1000::device::write(uint16_t off, uint32_t value) {
@@ -176,12 +175,18 @@ void e1000::device::rx_handle() {
         uint16_t len = rx_descs[rx_cur]->length;
 
         net::eth *eth_hdr = (net::eth *) buf;
+
+        size_t pkt_len = len - sizeof(net::eth);
+        void *pkt_data = ((char *) eth_hdr) + sizeof(net::eth);
+
         switch(net::ntohs(eth_hdr->type)) {
             case 0x0806:
-                arp_handle(((char *) eth_hdr) + sizeof(net::eth));
+                net::arp::arp_handle(this, pkt_data);
+                break;
+            case 0x0800:
+                net::ipv4::ipv4_handle(this, pkt_data, pkt_len);
                 break;
             default:
-                kmsg(netlog, "Unknown packet type receive");
                 break;
         }
 
@@ -192,124 +197,6 @@ void e1000::device::rx_handle() {
         rx_cur = (rx_cur + 1) % rx_max;
         write(reg_rx_desc_tail, old_rx_cur);
     }
-}
-
-void e1000::device::arp_send(net::mac dest_mac, uint32_t dest_ip) {
-    size_t eth_pkt_len = sizeof(net::eth) + sizeof(net::pkt::arp_eth_ipv4);
-    char *eth_pkt = (char *) kmalloc(eth_pkt_len);
-
-    net::eth *eth_hdr = (net::eth *) eth_pkt;
-    memcpy(eth_hdr->dest, dest_mac, net::eth_alen);
-    memcpy(eth_hdr->src, mac, net::eth_alen);
-    eth_hdr->type = net::htons(0x0806);
-
-    net::pkt::arp_eth_ipv4 *arp_pkt = (net::pkt::arp_eth_ipv4 *) (eth_pkt + sizeof(net::eth));
-
-    arp_pkt->host_type = net::htons(1);
-    arp_pkt->proto_type = net::htons(0x0800);
-
-    arp_pkt->host_len = net::eth_alen;
-    arp_pkt->proto_len = net::ipv4_alen;
-
-    arp_pkt->op = net::htons(net::pkt::arp_res);
-
-    memcpy(arp_pkt->src_addr, mac, net::eth_alen);
-    arp_pkt->src_ip = net::ipv4_aton(ipv4_addr);
-
-    memcpy(arp_pkt->dest_addr, dest_mac, net::eth_alen);
-    arp_pkt->dest_ip = dest_ip;
-
-    send(eth_pkt, eth_pkt_len);
-}
-
-void e1000::device::arp_handle(void *pkt) {
-    net::pkt::arp_eth_ipv4 *arp_pkt = (net::pkt::arp_eth_ipv4 *) pkt;
-
-    uint16_t host_type = net::ntohs(arp_pkt->host_type);
-    uint16_t proto_type = net::ntohs(arp_pkt->proto_type);
-
-    uint8_t host_len = arp_pkt->host_len;
-    uint8_t proto_len = arp_pkt->proto_len;
-
-    uint16_t op = net::ntohs(arp_pkt->op);
-
-    // TODO: gratuitous arp
-
-    if (host_type != 1 || proto_type != 0x800) {
-        return;
-    }
-
-    if (host_len != net::eth_alen || proto_len != net::ipv4_alen) {
-        return;
-    }
-
-    // TODO: process other people's ARP requests
-    switch (op) {
-        case net::pkt::arp_res: {
-            net::mac dest_mac;
-            memcpy(dest_mac, arp_pkt->dest_addr, net::eth_alen);
-            if (!net::is_same_mac(dest_mac, this->mac)) {
-                return;
-            }
-
-            net::mac src_mac;
-            memcpy(src_mac, arp_pkt->src_addr, net::eth_alen);
-            uint32_t src_ip = net::ntohl(arp_pkt->src_ip);
-
-            if (arp_table.contains(src_ip)) {
-                uint8_t *old_mac = arp_table[src_ip];
-                arp_table.remove(src_ip);
-                kfree(old_mac);
-            }
-
-            uint8_t *arp_mac = (uint8_t *) kmalloc(net::eth_alen);
-            memcpy(arp_mac, src_mac, net::eth_alen);
-
-            arp_table.insert(src_ip, arp_mac);
-
-            char *ipv4_str = (char *) kmalloc(16);
-
-            kmsg(netlog, "%s is at %x:%x:%x:%x:%x:%x", net::ipv4_ntoa(src_ip, ipv4_str), src_mac[0], src_mac[1], src_mac[2],
-                src_mac[3], src_mac[4], src_mac[5]);
-            break;
-        }
-
-        case net::pkt::arp_req: {
-            net::mac dest_mac;
-            memcpy(dest_mac, arp_pkt->src_addr, net::eth_alen);
-            uint32_t dest_ip = arp_pkt->src_ip;
-
-            arp_send(dest_mac, dest_ip);
-        }
-    }
-}
-
-void e1000::device::arp_probe() {
-    size_t eth_pkt_len = sizeof(net::eth) + sizeof(net::pkt::arp_eth_ipv4);
-    char *eth_pkt = (char *) kmalloc(eth_pkt_len);
-
-    net::eth *eth_hdr = (net::eth *) eth_pkt;
-    memcpy(eth_hdr->dest, net::broadcast_mac, net::eth_alen);
-    memcpy(eth_hdr->src, mac, net::eth_alen);
-    eth_hdr->type = net::htons(0x0806);
-
-    net::pkt::arp_eth_ipv4 *arp_pkt = (net::pkt::arp_eth_ipv4 *) (eth_pkt + sizeof(net::eth));
-
-    arp_pkt->host_type = net::htons(1);
-    arp_pkt->proto_type = net::htons(0x0800);
-
-    arp_pkt->host_len = net::eth_alen;
-    arp_pkt->proto_len = net::ipv4_alen;
-
-    arp_pkt->op = net::htons(net::pkt::arp_req);
-
-    memcpy(arp_pkt->src_addr, mac, net::eth_alen);
-    arp_pkt->src_ip = 0;
-
-    memset(arp_pkt->dest_addr, 0, net::eth_alen);
-    arp_pkt->dest_ip = net::ipv4_aton(ipv4_gateway);
-
-    send(eth_pkt, eth_pkt_len);
 }
 
 bool e1000::device::init() {
@@ -343,8 +230,44 @@ bool e1000::device::init() {
     return true;
 }
 
+void e1000::device::init_routing() {
+    add_route(net::broadcast_ipv4, ipv4_gateway_addr, net::broadcast_ipv4);
+    add_route(ipv4_gateway_addr, net::broadcast_ipv4, "255.255.255.0", ~(0xFF));
+}
+
+void e1000::device::add_route(const char *ipv4_dest,
+    const char *ipv4_gateway, const char *ipv4_netmask,
+    uint16_t mtu,
+    uint32_t dest_mask)  {
+    uint32_t dest = net::ipv4_pton(ipv4_dest) & dest_mask;
+    uint32_t gateway = net::ipv4_pton(ipv4_gateway);
+    uint32_t netmask = net::ipv4_pton(ipv4_netmask);
+
+    ipv4_routing_table.push(net::route(dest, gateway, netmask, mtu));
+}
+
+uint32_t e1000::device::route(uint32_t dest) {
+    uint32_t gateway = 0;
+    uint32_t current_mask = 0;
+
+    // search for the longest prefix
+    for (auto route: ipv4_routing_table) {
+        if ((route.dest & route.netmask) == (dest & route.netmask)) {
+            if (route.netmask > current_mask) {
+                gateway = route.gateway;
+                current_mask = route.netmask;
+            }
+        }
+    }
+
+    return gateway;
+}
+
 void e1000::device::send(const void *buf, size_t len) {
-    tx_descs[tx_cur]->address = ((uint64_t) buf) - memory::x86::virtualBase;
+    void *send_buf = kmalloc(len);
+    memcpy(send_buf, buf, len);
+
+    tx_descs[tx_cur]->address = ((uint64_t) send_buf) - memory::x86::virtualBase;
     tx_descs[tx_cur]->length = len;
 
     tx_descs[tx_cur]->cmd = tx_desc::tx_bit_eop | tx_desc::tx_bit_fcs | tx_desc::tx_bit_rs;
@@ -355,6 +278,8 @@ void e1000::device::send(const void *buf, size_t len) {
     write(reg_tx_desc_tail, tx_cur);
 
     while ((tx_descs[old_tx_cur]->status & tx_desc::tx_bit_done) == 0) { asm volatile("pause"); }
+
+    kfree(send_buf);
 }
 
 void e1000::irq_handler(arch::irq_regs *r) {
@@ -373,7 +298,7 @@ void e1000::init() {
     if (!(pci_dev = pci::get_device(intel_id, emu_id))
         && !(pci_dev = pci::get_device(intel_id, i217_id))
         && !(pci_dev = pci::get_device(intel_id, lm_id))) {
-        kmsg(netlog, "No E1000 Network Controllers found");
+        kmsg(logger, "No E1000 Network Controllers found");
         return;
     }
 
@@ -400,8 +325,13 @@ void e1000::init() {
     net_dev->has_eeprom = false;
 
     // TODO: ioctl to configure the gateway
-    net_dev->ipv4_gateway = (char *) "192.168.100.1";
-    net_dev->ipv4_addr = (char *) "192.168.100.2";
+    net_dev->ipv4_gateway_addr = (char *) "192.168.100.1";
+    net_dev->ipv4_host_addr = (char *) "192.168.100.2";
+    net_dev->ipv4_netmask_addr = (char *) "255.255.255.0";
+
+    net_dev->ipv4_host = net::ipv4_pton(net_dev->ipv4_host_addr);
+    net_dev->ipv4_gateway = net::ipv4_pton(net_dev->ipv4_gateway_addr);
+    net_dev->ipv4_netmask = net::ipv4_pton(net_dev->ipv4_netmask_addr);
 
     acpi_resource_t irq_resource;
     auto err = lai_pci_route_pin(&irq_resource, 0, pci_dev->get_bus(), pci_dev->get_slot(), pci_dev->get_func(), pci_dev->read_pin());
@@ -417,5 +347,5 @@ void e1000::init() {
     net_dev->init();
     kmsg(logger, "device initialized");
 
-    net_dev->arp_probe();
+    net::arp::arp_probe(net_dev, net_dev->ipv4_gateway);
 }

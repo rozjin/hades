@@ -11,7 +11,7 @@
 #include <sys/sched/sched.hpp>
 
 void pit_tick_handler(arch::irq_regs *r) {
-    arch::tick_clock(sched::TIMER_HZ / pit::PIT_FREQ);
+    arch::tick_clock(sched::NANOS_PER_MILLI / pit::PIT_FREQ);
 }
 
 void pit::init() {

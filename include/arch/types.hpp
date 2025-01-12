@@ -36,6 +36,8 @@ namespace arch {
     irq_regs sched_to_irq(sched_regs *regs);
     sched_regs irq_to_sched(irq_regs *regs);
 
+    bool is_user(sched_regs *regs);
+
     using irq_fn = void(*)(irq_regs *r);
 
     void init_irqs();
@@ -55,9 +57,9 @@ namespace arch {
     void save_context(irq_regs *r, sched::thread *task);
     void rstor_context(sched::thread *task, irq_regs *r);
 
-    void init_default_sigreturn(sched::thread *task, arch::thread_ctx *ctx, 
+    void init_default_sigreturn(sched::thread *task, 
         sched::signal::signal *signal, sched::signal::ucontext *context);
-    void init_user_sigreturn(sched::thread *task, arch::thread_ctx *ctx, 
+    void init_user_sigreturn(sched::thread *task,
         sched::signal::signal *signal, sched::signal::sigaction *action,
         sched::signal::ucontext *context);
 

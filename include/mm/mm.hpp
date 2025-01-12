@@ -5,8 +5,21 @@
 #include <cstddef>
 #include <mm/common.hpp>
 
+extern void *kmalloc(size_t size);
+extern void kfree(void *ptr);
+
+inline void *kcalloc(size_t nr_items, size_t size) {
+    return kmalloc(nr_items * size);
+}
+
+inline void kfree_sz(void *ptr, size_t _) {
+    kfree(ptr);
+}
+
 namespace memory {
     namespace mm {
+        extern void init();
+
         namespace allocator {
             void *malloc(size_t req_size);
             void *calloc(size_t nr_items, size_t size);
@@ -15,40 +28,24 @@ namespace memory {
         
         struct heap_allocator {
             void *allocate(size_t size) {
-                return allocator::malloc(size);
+                return kmalloc(size);
             }
             
             void deallocate(void *ptr) {
-                allocator::free(ptr);
+                kfree(ptr);
             }
 
             void deallocate(void *ptr, size_t _) {
-                allocator::free(ptr);
+                kfree(ptr);
             }
 
             void free(void *ptr) {
-                allocator::free(ptr);
+                kfree(ptr);
             }
         };
 
         inline mm::heap_allocator heap{};
     };
-}
-
-inline void *kmalloc(size_t length) {
-    return memory::mm::allocator::malloc(length);
-}
-
-inline void *kcalloc(size_t nr_items, size_t size) {
-    return memory::mm::allocator::calloc(nr_items, size);
-}
-
-inline void kfree(void *ptr) {
-    memory::mm::allocator::free(ptr);
-}
-
-inline void kfree_sz(void *ptr, size_t _) {
-    memory::mm::allocator::free(ptr);
 }
 
 #endif

@@ -1,3 +1,4 @@
+#include "driver/video/vesa.hpp"
 #include <arch/types.hpp>
 #include <cstddef>
 #include <sys/sched/signal.hpp>
@@ -53,6 +54,8 @@ ssize_t tty::device::on_open(vfs::fd *fd, ssize_t flags) {
         (arch::get_process() && arch::get_process()->group->pgid == arch::get_process()->sess->leader_pgid)) {
         sess = arch::get_process()->sess;
         fg = arch::get_process()->group;
+
+        arch::get_process()->sess->tty = this;
     }
 
     return 0;
@@ -120,8 +123,6 @@ ssize_t tty::device::write(void *buf, size_t count, size_t offset) {
         return count - copied;
     }
 
-    debug("Writing %s", chars);
-
     size_t bytes = 0;
     for (bytes = 0; bytes < count; bytes++) {
         if (!out.push(*chars++)) {
@@ -184,6 +185,8 @@ ssize_t tty::device::ioctl(size_t req, void *buf) {
 
             sess = arch::get_process()->sess;
             fg = arch::get_process()->group;
+
+            arch::get_process()->sess->tty = this;            
             lock.irq_release();
             return 0;
         }
@@ -199,6 +202,18 @@ ssize_t tty::device::ioctl(size_t req, void *buf) {
             in_lock.irq_release();
 
             lock.irq_release();
+            return 0;
+        }
+
+        case TCSETS: {
+            in_lock.irq_acquire();
+            out_lock.irq_acquire();
+
+            tty::termios *attrs = (tty::termios *) buf;
+            termios = *attrs;
+
+            out_lock.irq_release();
+            in_lock.irq_release();
             return 0;
         }
 
@@ -229,17 +244,12 @@ ssize_t tty::device::ioctl(size_t req, void *buf) {
 
             char c;
             while (in.pop(&c));
+
             out_lock.irq_release();
             in_lock.irq_release();
 
             lock.irq_release();
             return 0;            
-        }
-        
-        case SET_ACTIVE: {
-            set_active();
-            lock.irq_release();
-            return 0;
         }
 
         default: {
@@ -257,7 +267,7 @@ ssize_t tty::device::ioctl(size_t req, void *buf) {
 }
 
 void tty::set_active(frg::string_view path, vfs::fd_table *table) {
-    auto fd = vfs::open(nullptr, path, table, O_NOCTTY, O_RDONLY);
+    auto fd = vfs::open(nullptr, path, table, O_NOCTTY, O_RDONLY, 0, 0);
     if (fd == nullptr) return;
 
     vfs::devfs::dev_priv *private_data = (vfs::devfs::dev_priv *) fd->desc->node->private_data; 
@@ -266,5 +276,9 @@ void tty::set_active(frg::string_view path, vfs::fd_table *table) {
 
     if (tty) {
         active_tty = tty;
+    }
+
+    if (!video::vesa::disabled) {
+        video::vesa::disabled = true;
     }
 }
