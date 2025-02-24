@@ -1,7 +1,7 @@
 #include <arch/x86/types.hpp>
 #include <arch/x86/hpet.hpp>
 #include <sys/acpi.hpp>
-#include <sys/pci.hpp>
+#include <driver/bus/pci.hpp>
 #include <cstddef>
 #include <util/log/log.hpp>
 #include <util/log/panic.hpp>

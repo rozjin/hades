@@ -1,5 +1,8 @@
-#include "fs/dev.hpp"
-#include "util/stivale.hpp"
+#ifndef FBDEV_HPP
+#define FBDEV_HPP
+
+#include <fs/dev.hpp>
+#include <util/stivale.hpp>
 #include <cstddef>
 #include <cstdint>
 
@@ -99,7 +102,7 @@ namespace fb {
     constexpr size_t major = 29;
 
     void init(stivale::boot::tags::framebuffer *info);    
-    struct device : vfs::devfs::device {
+    struct device : vfs::devfs::chardev {
         private:
             size_t width;
             size_t height;
@@ -107,10 +110,8 @@ namespace fb {
             size_t pitch;
             size_t address;
 
-            size_t id;
-
             fb_info linux_compat;
-            util::lock lock;
+            util::spinlock lock;
         public:
             friend struct vt::driver;
             friend void init(stivale::boot::tags::framebuffer *info);
@@ -118,6 +119,16 @@ namespace fb {
             ssize_t read(void *buf, size_t count, size_t offset) override;
             ssize_t write(void *buf, size_t count, size_t offset) override; 
             ssize_t ioctl(size_t req, void *buf) override;
-            void *mmap(vfs::node *file, void *addr, size_t len, size_t offset) override;
+
+            device(vfs::devfs::busdev *bus, ssize_t major, ssize_t minor, void *aux):
+                vfs::devfs::chardev(bus, major, minor, aux) {}
+//            void *mmap(vfs::node *file, void *addr, size_t len, size_t offset) override;
+    };
+
+    struct matcher: vfs::devfs::matcher {
+        matcher(): vfs::devfs::matcher(true,
+            "fb", nullptr, false, 0) {}
     };
 }
+
+#endif

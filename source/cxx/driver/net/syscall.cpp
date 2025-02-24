@@ -3,12 +3,12 @@
 #include <util/errors.hpp>
 #include <cstddef>
 
-static const char *hostname[253];
+static const char *hostname[256];
 void syscall_sethostname(arch::irq_regs *r) {
     const char *name = (const char *) r->rdi;
     size_t len = r->rsi;
 
-    if (len > 252) {
+    if (len > 255) {
         arch::set_errno(ENAMETOOLONG);
         r->rax = -1;
         return;
@@ -29,7 +29,7 @@ void syscall_gethostname(arch::irq_regs *r) {
     char *name = (char *) r->rdi;
     size_t len = r->rsi;
 
-    if (len > 252) {
+    if (len > 255) {
         arch::set_errno(ENAMETOOLONG);
         r->rax = -1;
         return;

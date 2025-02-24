@@ -1,3 +1,4 @@
+#include "driver/dtable.hpp"
 #include "fs/dev.hpp"
 #include "fs/vfs.hpp"
 #include "mm/common.hpp"
@@ -6,7 +7,7 @@
 #include <driver/video/fbdev.hpp>
 
 void fb::init(stivale::boot::tags::framebuffer *info) {
-    auto device = frg::construct<fb::device>(memory::mm::heap);
+    auto device = frg::construct<fb::device>(memory::mm::heap, vfs::devfs::mainbus, dtable::majors::FB, -1, nullptr);
 
     device->width = info->width;
     device->height = info->height;
@@ -14,8 +15,8 @@ void fb::init(stivale::boot::tags::framebuffer *info) {
     device->pitch = info->pitch;
     device->address = info->addr + memory::x86::virtualBase;
 
-    device->id = 0;
     device->major = major;
+    device->minor = 0;
 
     device->linux_compat.fix = frg::construct<fb_fix_screeninfo>(memory::mm::heap);
     device->linux_compat.var = frg::construct<fb_var_screeninfo>(memory::mm::heap);
@@ -66,7 +67,7 @@ void fb::init(stivale::boot::tags::framebuffer *info) {
 		.reserved = { 0 }
     };
 
-    vfs::devfs::add("fb0", device);
+    vfs::devfs::append_device(device, dtable::majors::FB);
 }
 
 ssize_t fb::device::read(void *buf, size_t count, size_t offset) {
@@ -107,6 +108,9 @@ ssize_t fb::device::ioctl(size_t req, void *buf) {
     return 0;
 }
 
+/*
 void *fb::device::mmap(vfs::node *file, void *addr, size_t len, size_t offset) {
     return (void *)(linux_compat.fix->smem_start + offset);
 }
+
+*/

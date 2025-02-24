@@ -1,7 +1,7 @@
 /*             Author: Benjamin David Lunt
  *                     Forever Young Software
  *                     Copyright (c) 1984-2022
- *  
+ *
  *  This code is donated to the Freeware communitee.  You have the
  *   right to use it for learning purposes only.  You may not modify it
  *   for redistribution for any other purpose unless you have written
@@ -9,7 +9,7 @@
  *
  *  You may modify and use it in your own projects as long as they are
  *   for non-profit only and if distributed, have these same requirements.
- *  Any project for profit that uses this code must have written 
+ *  Any project for profit that uses this code must have written
  *   permission from the author.
  *
  *  For more information:
@@ -23,6 +23,8 @@
  */
 
 
+#include "mm/common.hpp"
+#include <cstddef>
 #include <mm/pmm.hpp>
 #include <mm/mm.hpp>
 
@@ -64,9 +66,7 @@
       (p0)->next->prev = (p0); \
 }
 
-util::lock mm_lock{};
-static void *kernel_heap = nullptr;
-
+util::spinlock mm_lock{};
 struct memory_pebble;
 struct memory_bucket;
 
@@ -90,7 +90,7 @@ struct [[gnu::packed]] memory_pebble {
     uint32_t sflags;        // sent flags for this pebble
     uint32_t padding;       // padding/alignment
     size_t size;          // count of bytes requested
-    
+
     memory_bucket *parent; // parent bucket of this pebble
 
   // linked list of pebbles
@@ -104,11 +104,11 @@ memory_pebble *split_pebble(struct memory_pebble *pebble, size_t size);
 
 // allocates a linear block of memory, in 'size' bytes, and creates
 //  a Bucket for this block, with one (free) Pebble.
-memory_bucket* create_bucket(size_t size) {  
+memory_bucket* create_bucket(size_t size) {
   // size must be a even number of pages
   size = (size + (memory::page_size - 1)) & ~(memory::page_size - 1);
 
-  memory_bucket* bucket = (memory_bucket* ) memory::pmm::alloc(size / memory::page_size);
+  memory_bucket* bucket = (memory_bucket* ) pmm::alloc(size / memory::page_size);
   if (bucket != NULL) {
     bucket->magic = MALLOC_MAGIC_BUCKET;
     bucket->lflags = BUCKET_FLAG_FIRST;
@@ -117,7 +117,7 @@ memory_bucket* create_bucket(size_t size) {
 
     bucket->prev = NULL;  // these will be assigned by the insert_bucket() call
     bucket->next = NULL;
-    
+
     memory_pebble* first = (memory_pebble* ) ((uint8_t *) bucket + sizeof(memory_bucket));
     bucket->first = first;
 
@@ -135,10 +135,41 @@ memory_bucket* create_bucket(size_t size) {
   return bucket;
 }
 
-void memory::mm::init() {
-    memory_bucket* bucket = create_bucket(page_size * 4);
-    kernel_heap = bucket;
-}
+memory_bucket* place_bucket(void *start, size_t size) {
+    // size must be a even number of pages
+    size = (size + (memory::page_size - 1)) & ~(memory::page_size - 1);
+
+    memory_bucket* bucket = (memory_bucket *) start;
+    if (bucket != NULL) {
+      bucket->magic = MALLOC_MAGIC_BUCKET;
+      bucket->lflags = BUCKET_FLAG_FIRST;
+      bucket->size = size / memory::page_size;  // count of pages used
+      bucket->largest = size - sizeof(memory_bucket) - sizeof(memory_pebble);
+
+      bucket->prev = NULL;  // these will be assigned by the insert_bucket() call
+      bucket->next = NULL;
+
+      memory_pebble* first = (memory_pebble* ) ((uint8_t *) bucket + sizeof(memory_bucket));
+      bucket->first = first;
+
+      first->magic = MALLOC_MAGIC_PEBBLE;
+      first->sflags = 0;
+      first->lflags = PEBBLE_FLAG_FREE;
+      first->padding = 0;
+      first->size = bucket->largest;
+
+      first->parent = bucket;
+      first->prev = NULL;
+      first->next = NULL;
+    }
+
+    return bucket;
+  }
+
+extern "C" char __boot_heap_start[];
+extern "C" char __boot_heap_end[];
+
+static void *kernel_heap = nullptr;
 
 // insert a bucket at destination
 void insert_bucket(memory_bucket* bucket, void *destination) {
@@ -157,7 +188,7 @@ void remove_bucket(memory_bucket* bucket) {
       bucket->prev->next = bucket->next;
     if (bucket->next)
         bucket->next->prev = bucket->prev;
-    memory::pmm::free(bucket);
+    pmm::free(bucket);
   }
 }
 
@@ -185,7 +216,7 @@ memory_pebble* place_pebble(memory_bucket *bucket, memory_pebble* pebble) {
   memory_pebble* start = bucket->first;
   memory_pebble* best = NULL;
   size_t best_size = -1;
-  
+
   if (bucket->lflags & BUCKET_FLAG_BEST) {
     // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
     // BEST FIT method
@@ -233,7 +264,7 @@ memory_pebble* place_pebble(memory_bucket *bucket, memory_pebble* pebble) {
 memory_pebble* split_pebble(memory_pebble* pebble, size_t size) {
   memory_pebble* new_pebble = NULL;
   size_t new_size;
-  
+
   if (SPLIT_PEBBLE(pebble->size, size)) {
     new_size = (size + (PEBBLE_MIN_ALIGN - 1)) & ~(PEBBLE_MIN_ALIGN - 1);
     new_pebble = (memory_pebble* ) ((uint8_t *) pebble + sizeof(memory_pebble) + new_size);
@@ -296,6 +327,11 @@ memory_pebble* shrink_pebble(memory_pebble* pebble, size_t size) {
 }
 
 void *kmalloc(size_t size) {
+    if (kernel_heap == nullptr) {
+        kernel_heap = __boot_heap_start;
+        place_bucket(kernel_heap, 128 * memory::page_size);
+    }
+
   void *ret = NULL;
 
   // minimum amount of memory we allocate to the caller
@@ -309,7 +345,7 @@ void *kmalloc(size_t size) {
   pebble.padding = 0;
   pebble.size = (size + (PEBBLE_MIN_ALIGN - 1)) & ~(PEBBLE_MIN_ALIGN - 1);
 
-  mm_lock.irq_acquire();
+  util::lock_guard mm_guard{mm_lock};
 
   memory_bucket* bucket = (memory_bucket* ) kernel_heap;
   while (bucket != NULL) {
@@ -337,32 +373,29 @@ void *kmalloc(size_t size) {
     }
   }
 
-  mm_lock.irq_release();
-
   // if we are to clear the memory, do it now
   if (ret)
     memset(ret, 0, size);
-  
+
   return ret;
 }
 
 void *krealloc(void *ptr, size_t size) {
   memory_pebble* pebble;
   void *ret = NULL;
-  
+
   if (size == 0) {
     kfree(ptr);
     return NULL;
   }
-  
+
   if (ptr == NULL)
     return kmalloc(size);
 
-  mm_lock.irq_acquire();
+  util::lock_guard mm_guard{mm_lock};
 
   pebble = (memory_pebble* ) ((uint8_t *) ptr - sizeof(memory_pebble));
 
-  mm_lock.irq_release();
 
     if (size <= pebble->size)
         ret = shrink_pebble(pebble, size);
@@ -382,19 +415,18 @@ void kfree(void *ptr) {
   if (ptr == NULL)
     return;
 
-  mm_lock.irq_acquire();
+  util::lock_guard mm_guard{mm_lock};
 
   memory_pebble* pebble = (memory_pebble* ) ((uint8_t *) ptr - sizeof(memory_pebble));
-  
+
   // check that it actually is a pebble
   if (pebble->magic != MALLOC_MAGIC_PEBBLE) {
-    mm_lock.irq_release();
     return;
   }
-  
+
   // mark it as free
   pebble->lflags = PEBBLE_FLAG_FREE;
-  
+
   // see if we can absorb any of the neighbors
   pebble = melt_prev(pebble);
   absorb_next(pebble);
@@ -405,6 +437,4 @@ void kfree(void *ptr) {
     remove_bucket(bucket);
   else
     bucket_update_largest(bucket);
-  
-  mm_lock.irq_release();
-}
+  }

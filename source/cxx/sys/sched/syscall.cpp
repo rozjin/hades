@@ -2,6 +2,7 @@
 #include "arch/vmm.hpp"
 #include "arch/x86/smp.hpp"
 #include "arch/x86/types.hpp"
+#include "util/lock.hpp"
 #include <fs/vfs.hpp>
 #include <mm/common.hpp>
 #include <mm/vmm.hpp>
@@ -216,17 +217,7 @@ void syscall_fork(arch::irq_regs *r) {
 
 void syscall_exit(arch::irq_regs *r) {
     auto process = arch::get_process();
-    auto task = arch::get_thread();
-
-    x86::get_locals()->task = nullptr;
-    x86::get_locals()->pid = -1;
-
-    task->state = sched::thread::DEAD;
-    task->dispatch_ready = false;
-    task->in_syscall = false;
-
-    sched::threads[task->tid] = (sched::thread *) 0;
-
+    
     process->kill(r->rdi);
     while (true) {
         x86::do_tick();
@@ -265,19 +256,14 @@ void syscall_sleep(arch::irq_regs *r) {
         .tv_nsec = *nanos
     };
 
-    auto thread = arch::get_thread();
-    thread->waitq->set_timer(&req);
 
-    auto [waker, got_signal] = thread->waitq->block(arch::get_thread());
-    if (got_signal) {
+    auto [evt, thread] = ipc::receive({}, true, &req);
+    if (evt < 0) {
         r->rax = req.tv_sec;
-        goto finish;
+        return;
     }
 
     r->rax = 0;
-    
-    finish:
-        thread->waitq->timer_trigger->remove(thread->waitq);
 }
 
 void syscall_clock_gettime(arch::irq_regs *r) {
@@ -362,24 +348,14 @@ void syscall_setpgid(arch::irq_regs *r) {
         return;
     }
 
-    if (pgid) {
-        sched::process_group *new_group = nullptr;
-        for (size_t i = 0; i < process->sess->groups.size(); i++) {
-            if (process->sess->groups[i] == nullptr) continue;
-            auto group = process->sess->groups[i];
-            if (group->pgid == pgid) {
-                new_group = group;
-                break;
-            }
-        }
-
-        if (new_group == nullptr) {
-            arch::set_errno(EINVAL);
+    sched::process_group *new_group = sched::process_groups[pgid];
+    if (new_group) {
+        auto old_group = process->group;
+        if (new_group->sess != old_group->sess) {
+            arch::set_errno(EPERM);
             r->rax = -1;
             return;
         }
-
-        auto old_group = process->group;
 
         process->group = new_group;
         new_group->add_process(process);
@@ -387,6 +363,7 @@ void syscall_setpgid(arch::irq_regs *r) {
 
         if (old_group->process_count == 0) {
             frg::destruct(memory::mm::heap, old_group);
+            sched::process_groups[old_group->pgid] = 0;
             process->sess->remove_group(old_group);
         }
     }
@@ -394,8 +371,9 @@ void syscall_setpgid(arch::irq_regs *r) {
     auto old_group = process->group;
     if (old_group) {
         old_group->remove_process(process);
-        if (old_group->process_count > 0) {
+        if (old_group->process_count == 0) {
             old_group->sess->remove_group(old_group);
+            sched::process_groups[old_group->pgid] = 0;
             frg::destruct(memory::mm::heap, old_group);            
         }
     }
@@ -442,8 +420,9 @@ void syscall_setsid(arch::irq_regs *r) {
     auto old_group = current_process->group;
     if (old_group) {
         old_group->remove_process(current_process);
-        if (old_group->process_count > 0) {
+        if (old_group->process_count == 0) {
             old_group->sess->remove_group(old_group);
+            sched::process_groups[old_group->pgid] = 0;
             frg::destruct(memory::mm::heap, old_group);            
         }
     }
@@ -465,15 +444,12 @@ void syscall_sigreturn(arch::irq_regs *r) {
     auto process = arch::get_process();
 
     auto ctx = &current_task->sig_ctx;
-    ctx->lock.irq_acquire();
 
-    auto signal = &ctx->queue[current_task->ucontext.signum - 1];
-    
+    util::lock_guard ctx_guard{ctx->lock};
+
     ctx->sigdelivered |= SIGMASK(current_task->ucontext.signum);
-    signal->notify_queue->arise(arch::get_thread());
-    frg::destruct(memory::mm::heap, signal->notify_queue);
 
-    ctx->lock.irq_release();
+    ctx_guard.~lock_guard();
 
     auto regs = &current_task->ucontext.ctx.reg;
     current_task->ctx.reg = *regs;
@@ -489,27 +465,30 @@ void syscall_sigreturn(arch::irq_regs *r) {
     current_task->ustack = current_task->sig_ustack;
     current_task->sig_ustack = tmp;
 
-    if (regs->cs & 0x3) {
-        x86::swapgs();
-    }
-
     auto iretq_regs = arch::sched_to_irq(regs);
 
     x86::set_fcw(regs->fcw);
     x86::set_mxcsr(regs->mxcsr);
     x86::load_sse(current_task->ucontext.ctx.sse_region);
     
+    x86::set_user_fs(regs->fs);
+    x86::set_user_gs(regs->gs);
+
     current_task->state = sched::thread::READY;
     process->mem_ctx->unmap((void *) current_task->ucontext.stack, 4 * memory::page_size, true);
+
+    if (regs->cs & 0x3) {
+        x86::swapgs();
+    }
 
     x86_sigreturn_exit(&iretq_regs);
 }
 
 void syscall_sigenter(arch::irq_regs *r) {
     auto process = arch::get_process();
-    process->sig_lock.irq_acquire();
+    
+    util::lock_guard sig_guard{process->sig_lock};
     process->trampoline = r->rdi;
-    process->sig_lock.irq_release();
     
     r->rax = 0;
 }
@@ -571,22 +550,20 @@ void syscall_getcwd(arch::irq_regs *r) {
 
     auto process = arch::get_process();
     auto node = process->cwd;
-    node->lock.irq_acquire();
 
+    util::lock_guard guard{node->lock};
     auto path = vfs::get_absolute(node);
+
     if (path->size() <= size) {
         arch::copy_to_user(buf, path->data(), strlen(path->data()));
     } else {
         frg::destruct(memory::mm::heap, path);
-        node->lock.irq_release();
-
         arch::set_errno(ERANGE);
         r->rax = 0;
         return;
     }
 
     frg::destruct(memory::mm::heap, path);
-    node->lock.irq_release();
     r->rax = (uintptr_t) buf;
 }
 

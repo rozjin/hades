@@ -46,11 +46,11 @@ static inline void processorPanic(arch::irq_regs *r) {
 }
 
 static log::subsystem logger = log::make_subsystem("SMP");
-static inline util::lock cpuBootupLock{};
+static util::spinlock cpuBootupLock{};
 extern "C" {
     void processorEntry(stivale::boot::info::processor *entry_ctx) {
-        cpuBootupLock.acquire();
-        
+        util::lock_guard guard{cpuBootupLock};
+
         auto *cpu = (x86::processor *) entry_ctx->extra_argument;
         x86::wrmsr(x86::MSR_GS_BASE, cpu);
 
@@ -63,7 +63,7 @@ extern "C" {
 
         kmsg(logger, "[CPU %u online]", x86::get_cpu());
 
-        cpuBootupLock.release();
+        guard.~lock_guard();
 
         apic::lapic::set_timer(1);
         x86::irq_on();
@@ -87,7 +87,7 @@ void x86::init_smp() {
 
         auto processor = frg::construct<x86::processor>(memory::mm::heap, lapic_id);
 
-        processor->kstack = (size_t) memory::pmm::stack(x86::initialStackSize);
+        processor->kstack = (size_t) pmm::stack(x86::initialStackSize);
         processor->ctx = vmm::boot;
         cpus.push_back(processor);
 
@@ -104,10 +104,11 @@ x86::processor *x86::get_locals() {
 }
 
 x86::tss::gdtr real_gdt;
-util::lock tssLock{};
+util::spinlock tssLock{};
 
 void x86::tss::init() {
-    tssLock.acquire();
+    util::lock_guard guard{tssLock};
+
     asm volatile("sgdt (%0)" : : "r"(&real_gdt));
 
     auto *cpuInfo = get_locals();
@@ -126,11 +127,10 @@ void x86::tss::init() {
     desc->pr = 1;
     desc->type = 0b1001;
 
-    tss->ist[0] = (uint64_t) memory::pmm::stack(4);
-    tss->ist[1] = (uint64_t) memory::pmm::stack(4);
+    tss->ist[0] = (uint64_t) pmm::stack(initialStackSize);
+    tss->ist[1] = (uint64_t) pmm::stack(initialStackSize);
 
     asm volatile("ltr %%ax" :: "a"(TSS_OFFSET));
-    tssLock.release();
 }
 
 sched::thread *x86::get_thread() {

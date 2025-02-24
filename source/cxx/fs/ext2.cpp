@@ -1,6 +1,7 @@
 #include "fs/vfs.hpp"
 #include "mm/mm.hpp"
 #include "util/log/log.hpp"
+#include <algorithm>
 #include <cstddef>
 #include <util/types.hpp>
 #include <cstdint>
@@ -81,7 +82,7 @@ vfs::node *vfs::ext2fs::lookup(node *parent, frg::string_view name) {
             return nullptr;
         }
 
-        if (strncmp(file->name, name.data(), util::max(file->dent->name_length, name.size()))!= 0) {
+        if (strncmp(file->name, name.data(), std::max((size_t) file->dent->name_length, name.size()))!= 0) {
             file = file->next;
             continue;
         }

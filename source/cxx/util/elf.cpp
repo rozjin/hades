@@ -46,11 +46,11 @@ elf::elf64_shdr *find_section(elf::file *file, uint32_t type, const char *name) 
 }
 
 bool init_symbols(elf::file *file) {
-    if (file->symtab_hdrs->sh_entsize != sizeof(elf::elf64_symtab)) {
+    if (file->symtab_hdr->sh_entsize != sizeof(elf::elf64_symtab)) {
         return false;
     }
 
-    uint64_t ents = file->symtab_hdrs->sh_size / file->symtab_hdrs->sh_entsize;
+    uint64_t ents = file->symtab_hdr->sh_size / file->symtab_hdr->sh_entsize;
     elf::elf64_symtab *symtab = (elf::elf64_symtab *) file->symtab;
 
     for (size_t i = 0; i < ents; i++) {
@@ -106,72 +106,72 @@ bool elf::file::init(vfs::fd *fd) {
         kfree(hdr);
         kfree(phdrs);
         kfree(shdrs);
-        
-        return false;
-    }
-
-    shstrtab_hdrs = shdrs + header->shstrndx;
-    shstrtab = memory::pmm::alloc(util::ceil(shstrtab_hdrs->sh_size, memory::page_size));
-    
-    vfs::lseek(fd, shstrtab_hdrs->sh_offset, SEEK_SET);
-    res = vfs::read(fd, shstrtab, shstrtab_hdrs->sh_size);
-
-    if ((size_t) res != shstrtab_hdrs->sh_size) {
-        kfree(hdr);
-        kfree(phdrs);
-        kfree(shdrs);
-        memory::pmm::free(shstrtab);
 
         return false;
     }
 
-    strtab_hdrs = find_section(this, SHT_STRTAB, ".strtab");
-    if (strtab_hdrs == nullptr) {
+    shstrtab_hdr = shdrs + header->shstrndx;
+    shstrtab = pmm::alloc(util::ceil(shstrtab_hdr->sh_size, memory::page_size));
+
+    vfs::lseek(fd, shstrtab_hdr->sh_offset, SEEK_SET);
+    res = vfs::read(fd, shstrtab, shstrtab_hdr->sh_size);
+
+    if ((size_t) res != shstrtab_hdr->sh_size) {
         kfree(hdr);
         kfree(phdrs);
         kfree(shdrs);
-        memory::pmm::free(shstrtab);
+        pmm::free(shstrtab);
 
         return false;
     }
 
-    strtab = memory::pmm::alloc(util::ceil(strtab_hdrs->sh_size, memory::page_size));
-    
-    vfs::lseek(fd, strtab_hdrs->sh_offset, SEEK_SET);
-    res = vfs::read(fd, strtab, strtab_hdrs->sh_size);
-
-    if ((size_t) res != strtab_hdrs->sh_size) {
+    strtab_hdr = find_section(this, SHT_STRTAB, ".strtab");
+    if (strtab_hdr == nullptr) {
         kfree(hdr);
         kfree(phdrs);
         kfree(shdrs);
-        memory::pmm::free(shstrtab);
-        memory::pmm::free(strtab);
+        pmm::free(shstrtab);
 
         return false;
     }
 
-    symtab_hdrs = find_section(this, SHT_SYMTAB, ".symtab");
-    if (symtab_hdrs == nullptr) {
+    strtab = pmm::alloc(util::ceil(strtab_hdr->sh_size, memory::page_size));
+
+    vfs::lseek(fd, strtab_hdr->sh_offset, SEEK_SET);
+    res = vfs::read(fd, strtab, strtab_hdr->sh_size);
+
+    if ((size_t) res != strtab_hdr->sh_size) {
         kfree(hdr);
         kfree(phdrs);
         kfree(shdrs);
-        memory::pmm::free(shstrtab);
-        memory::pmm::free(strtab);
+        pmm::free(shstrtab);
+        pmm::free(strtab);
 
         return false;
     }
 
-    symtab = memory::pmm::alloc(util::ceil(symtab_hdrs->sh_size, memory::page_size));
-
-    vfs::lseek(fd, symtab_hdrs->sh_offset, SEEK_SET);
-    res = vfs::read(fd, symtab, symtab_hdrs->sh_size);
-    if ((size_t) res != symtab_hdrs->sh_size) {
+    symtab_hdr = find_section(this, SHT_SYMTAB, ".symtab");
+    if (symtab_hdr == nullptr) {
         kfree(hdr);
         kfree(phdrs);
         kfree(shdrs);
-        memory::pmm::free(shstrtab);
-        memory::pmm::free(strtab);
-        memory::pmm::free(symtab);
+        pmm::free(shstrtab);
+        pmm::free(strtab);
+
+        return false;
+    }
+
+    symtab = pmm::alloc(util::ceil(symtab_hdr->sh_size, memory::page_size));
+
+    vfs::lseek(fd, symtab_hdr->sh_offset, SEEK_SET);
+    res = vfs::read(fd, symtab, symtab_hdr->sh_size);
+    if ((size_t) res != symtab_hdr->sh_size) {
+        kfree(hdr);
+        kfree(phdrs);
+        kfree(shdrs);
+        pmm::free(shstrtab);
+        pmm::free(strtab);
+        pmm::free(symtab);
 
         return false;
     }
@@ -181,9 +181,9 @@ bool elf::file::init(vfs::fd *fd) {
         kfree(hdr);
         kfree(phdrs);
         kfree(shdrs);
-        memory::pmm::free(shstrtab);
-        memory::pmm::free(strtab);
-        memory::pmm::free(symtab);
+        pmm::free(shstrtab);
+        pmm::free(strtab);
+        pmm::free(symtab);
 
         return false;
     }

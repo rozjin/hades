@@ -13,18 +13,19 @@ SECTIONS {
         *(.text)
    }
 
-   .ex_table : ALIGN(4K) {
-        _ex_table_begin = .;
-        KEEP(*(.ex_table*))
-        _ex_table_end = .;
-   }
-
-   .init_array : ALIGN(4K) {
-		_init_array_begin = .;
+   .init_array : ALIGN(8) {
+		__init_array_begin = .;
 		KEEP(*(SORT(.init_array.*)))
 		KEEP(*(.init_array*))
-		_init_array_end = .;
+		__init_array_end = .;
 	}
+
+    .fini_array : ALIGN(8) {
+        __fini_array_begin = .;
+        KEEP(*(SORT(.fini_array.*)))
+        KEEP(*(.fini_array))
+        __fini_array_end = .;
+    }
 
    .data : ALIGN(4K) {
    	    *(.data)
@@ -35,5 +36,10 @@ SECTIONS {
    .bss : ALIGN(4K) {
         *(COMMON)
 	    *(.bss)
+
+        . = ALIGN(4K);
+        __boot_heap_start = .;
+        . += 128K;
+        __boot_heap_end = .;
    }
 }

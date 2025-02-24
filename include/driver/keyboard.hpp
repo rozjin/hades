@@ -2,6 +2,7 @@
 #define KB_HPP
 
 #include <arch/x86/types.hpp>
+#include <fs/dev.hpp>
 #include <cstdint>
 
 namespace kb {
@@ -11,6 +12,11 @@ namespace kb {
 
     void init();
     void irq_handler(arch::irq_regs *r);
+
+    struct matcher: vfs::devfs::matcher {
+        matcher(): vfs::devfs::matcher(false,
+            nullptr, nullptr, false, 0) {}
+    };
 };
 
 #endif

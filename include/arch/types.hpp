@@ -39,6 +39,7 @@ namespace arch {
     bool is_user(sched_regs *regs);
 
     using irq_fn = void(*)(irq_regs *r);
+    using irq_ext = void(*)(irq_regs *r, void *aux);
 
     void init_irqs();
     void init_features();
@@ -48,7 +49,11 @@ namespace arch {
     void stall_cpu();
     bool get_irq_state();
 
+    size_t alloc_irq();
+
     size_t install_irq(irq_fn handler);
+    size_t install_irq(irq_ext handler, void *aux);
+
     void route_irq(size_t irq, size_t vector);
 
     void init_context(sched::thread *task, void (*main)(), uint64_t rsp, uint8_t privilege);

@@ -106,7 +106,11 @@
             "mutex": "cpp",
             "shared_mutex": "cpp",
             "syncstream": "cpp",
-            "iomanip": "cpp"
+            "iomanip": "cpp",
+            "ctime": "cpp",
+            "text_encoding": "cpp",
+            "stdint.h": "c",
+            "stdint-gcc.h": "c"
         },
         "C_Cpp.default.compileCommands": "/home/racemus/projects/hades/build/compile_commands.json",
         "C_Cpp.default.configurationProvider": "mesonbuild.mesonbuild"

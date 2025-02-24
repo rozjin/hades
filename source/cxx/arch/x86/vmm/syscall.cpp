@@ -1,3 +1,4 @@
+#include "util/lock.hpp"
 #include <arch/vmm.hpp>
 #include <arch/x86/types.hpp>
 #include <arch/types.hpp>
@@ -74,7 +75,7 @@ void syscall_mmap(arch::irq_regs *r) {
         }
     }
 
-    ctx->lock.irq_acquire();
+    util::lock_guard guard{ctx->lock};
     if (prot & PROT_NONE) {
         if (flags & MAP_FIXED) {
             ctx->unmap(addr, pages);
@@ -93,7 +94,6 @@ void syscall_mmap(arch::irq_regs *r) {
             // private file
         } else {
             arch::set_errno(EINVAL);
-            ctx->lock.irq_release();
             r->rax = MAP_FAILED;
             return;
         }
@@ -101,7 +101,6 @@ void syscall_mmap(arch::irq_regs *r) {
 
     auto base = ctx->map(addr, pages, translate_flags(flags) | translate_prot(prot), flags & MAP_FIXED);
     r->rax = (uint64_t) base;
-    ctx->lock.irq_release();
 }
 
 void syscall_munmap(arch::irq_regs *r) {
@@ -124,7 +123,7 @@ void syscall_munmap(arch::irq_regs *r) {
         return;
     }
 
-    ctx->lock.irq_acquire();
+    util::lock_guard guard{ctx->lock};
     auto res = ctx->unmap(addr, pages);
     if (res == nullptr) {
         arch::set_errno(EINVAL);

@@ -1,5 +1,8 @@
+#include "driver/dtable.hpp"
 #include "driver/part.hpp"
 #include "frg/string.hpp"
+#include "fs/cache.hpp"
+#include "mm/common.hpp"
 #include "mm/mm.hpp"
 #include "util/log/log.hpp"
 #include "util/log/panic.hpp"
@@ -10,6 +13,37 @@
 #include <fs/dev.hpp>
 
 static log::subsystem logger = log::make_subsystem("DEV");
+vfs::devfs::rootbus *vfs::devfs::mainbus = nullptr;
+
+void vfs::devfs::rootbus::attach(ssize_t major, void *aux) {
+    switch(major) {
+        case PCI_MAJOR: {
+            pcibus *pci_bus = frg::construct<pcibus>(memory::mm::heap, this, 0);
+
+            bus_devices.push_back(pci_bus);
+            pci_bus->minor = bus_devices.size() - 1;
+            pci_bus->enumerate();
+        }
+
+        default: {
+            auto matcher = dtable::lookup_by_major(major);
+            if (matcher) {
+                auto device = matcher->match(this, nullptr);
+                if (device) {
+                    matcher->attach(this, device, nullptr);
+
+                    bus_devices.push_back(device);
+                    vfs::devfs::append_device(device, device->major);
+                }
+            }
+        }
+    }
+}
+
+void vfs::devfs::rootbus::enumerate() {
+    attach(PCI_MAJOR, nullptr);
+}
+
 void vfs::devfs::init() {
     vfs::mkdir(nullptr, "/dev", 0, DEFAULT_MODE, 0, 0);
     vfs::mount("/", "/dev", fslist::DEVFS, mflags::NOSRC);
@@ -18,11 +52,47 @@ void vfs::devfs::init() {
     kmsg(logger, "Initial devfs mounted.");
 }
 
-void vfs::devfs::add(frg::string_view path, device *dev) {
-    // TODO: device addition
-    node *device_node = vfs::make_recursive(vfs::device_fs()->root, path, dev->is_blockdev ? node::type::BLOCKDEV : node::type::CHARDEV, DEFAULT_MODE);
+void vfs::devfs::probe() {
+    mainbus = frg::construct<rootbus>(memory::mm::heap);
+    mainbus->enumerate();
+}
+
+void vfs::devfs::append_device(device *dev, ssize_t major) {
+    size_t idx = 0;
+
+    if (device_map.contains(major)) {
+        device_map[major].list.push(dev);
+        idx = device_map[major].last_index++;
+        dev->minor = idx;
+    } else {
+        device_list list{};
+        device_map[major] = list;
+
+        list.list.push(dev);
+
+        idx = list.last_index++;
+        dev->minor = idx;
+    }
+
+    devfs::matcher *matcher = dtable::lookup_by_major(major);
+    if (!matcher->has_file) return;
+
+    vfs::path device_path{};
+    if (matcher->subdir) {
+        device_path += matcher->subdir;
+        device_path += "/";
+    }
+
+    if (matcher->base_name) device_path += matcher->base_name;
+    if (matcher->alpha_names) {
+        device_path += alpha_lower[matcher->start_index + idx];   
+    } else {
+        device_path += matcher->start_index + idx + 48;
+    }
+
+    node *device_node = vfs::make_recursive(vfs::device_fs()->root, device_path, dev->cls == device_class::BLOCKDEV ? node::type::BLOCKDEV : node::type::CHARDEV, DEFAULT_MODE);
     if (!device_node) {
-        panic("[DEVFS]: Unable to make device: %s", path.data());
+        panic("[DEVFS]: Unable to make device: %s", device_path.data());
     }
 
     auto private_data = frg::construct<dev_priv>(memory::mm::heap);
@@ -30,7 +100,31 @@ void vfs::devfs::add(frg::string_view path, device *dev) {
     private_data->part = -1;
 
     device_node->private_data = private_data;
-    dev->file = device_node;
+
+    devfs::filedev *filedev = (devfs::filedev *) private_data->dev;
+    filedev->file = device_node;
+
+    if (dev->cls == device_class::BLOCKDEV) {
+        auto block_device = (blockdev *) dev;
+        block_device->disk_cache = cache::create_cache(block_device);
+    }
+}
+
+void vfs::devfs::remove_device(device *dev, ssize_t major) {
+    if (device_map.contains(major)) {
+        for (size_t i = 0; i < device_map[major].list.size(); i++) {
+            if (device_map[major].list[i] == dev) {
+                device_map[major].list[i] = 0;
+                if (dev->minor < device_map[major].last_index) {
+                    device_map[major].last_index = dev->minor;
+                }
+
+                return;
+            }
+        }
+    } else {
+        panic("Attempted to remove non-attached device");
+    }
 }
 
 vfs::node *vfs::devfs::lookup(node *parent, frg::string_view name) {
@@ -41,7 +135,7 @@ vfs::node *vfs::devfs::lookup(node *parent, frg::string_view name) {
     if (!private_data) return nullptr;
 
     devfs::device *device = private_data->dev;
-    if (!device || !device->resolveable) return nullptr;
+    if (!device) return nullptr;
 
     return node;
 }
@@ -50,9 +144,9 @@ ssize_t vfs::devfs::on_open(vfs::fd *fd, ssize_t flags) {
     auto private_data = (dev_priv *) fd->desc->node->private_data;
     if (!private_data) return -ENOENT;
 
-    devfs::device *device = private_data->dev;
-    if (!device) return -ENOENT;    
-    
+    devfs::filedev *device = (filedev *) private_data->dev;
+    if (!device) return -ENOENT;
+
     return device->on_open(fd, flags);
 }
 
@@ -60,9 +154,9 @@ ssize_t vfs::devfs::on_close(vfs::fd *fd, ssize_t flags) {
     auto private_data = (dev_priv *) fd->desc->node->private_data;
     if (!private_data) return -ENOENT;
 
-    devfs::device *device = private_data->dev;
-    if (!device) return -ENOENT;    
-    
+    devfs::filedev *device = (filedev *) private_data->dev;
+    if (!device) return -ENOENT;
+
     return device->on_close(fd, flags);
 }
 
@@ -70,14 +164,45 @@ ssize_t vfs::devfs::read(node *file, void *buf, size_t len, off_t offset) {
     auto private_data = (dev_priv *) file->private_data;
     if (!private_data) return -ENOENT;
 
-    devfs::device *device = private_data->dev;
+    devfs::filedev *device = (filedev *) private_data->dev;
     if (!device) return -ENOENT;
 
-    if (device->is_blockdev) {
+    if (device->cls == device_class::BLOCKDEV) {
+        devfs::blockdev *blockdev = (devfs::blockdev *) device;
+
         if (private_data->part >= 0) {
-            auto part = device->blockdev.part_list.data()[private_data->part];
-            return device->read(buf, len, offset + (part.begin * device->blockdev.block_size));
+            auto part = blockdev->part_list.data()[private_data->part];
+            offset = offset + (part.begin * blockdev->block_size);
         }
+
+        auto cache = blockdev->disk_cache;
+
+        size_t page_offset = offset & ~(0xFFF);
+        size_t start_offset = offset & 0xFFF;
+        void *page = cache->read_page(page_offset);
+
+        if (len <= memory::page_size - start_offset) {
+            memcpy(buf, (char *) page + start_offset, len);
+            return len;
+        } else {
+            memcpy(buf, (char *) page  + start_offset, memory::page_size - start_offset);
+        }
+
+        page_offset = offset / memory::page_size;
+        auto page_count = len / memory::page_size;
+        for (size_t i = 1; i < page_count; i++) {
+            page = cache->read_page((page_offset + i) * memory::page_size);
+            memcpy((char *) buf + (i * memory::page_size), page, memory::page_size);
+        }
+
+        auto end_offset = len % memory::page_size;
+        page_offset = (offset + len) / memory::page_size;
+        if (page_count && end_offset) {
+            page = cache->read_page(page_offset * memory::page_size);
+            memcpy((char *) buf + (page_count * memory::page_size), page, end_offset);            
+        }
+
+        return len;
     }
 
     return device->read(buf, len, offset);
@@ -87,14 +212,40 @@ ssize_t vfs::devfs::write(node *file, void *buf, size_t len, off_t offset) {
     auto private_data = (dev_priv *) file->private_data;
     if (!private_data) return -ENOENT;
 
-    devfs::device *device = private_data->dev;
+    devfs::filedev *device = (filedev *) private_data->dev;
     if (!device) return -ENOENT;
 
-    if (device->is_blockdev) {
+    if (device->cls == device_class::BLOCKDEV) {
+        devfs::blockdev *blockdev = (devfs::blockdev *) device;
+
         if (private_data->part >= 0) {
-            auto part = device->blockdev.part_list.data()[private_data->part];
-            return device->write(buf, len, offset + (part.begin * device->blockdev.block_size));
+            auto part = blockdev->part_list.data()[private_data->part];
+            offset = offset + (part.begin * blockdev->block_size);
+//            return device->read(buf, len, offset + (part.begin * blockdev->block_size));
         }
+
+        auto cache = blockdev->disk_cache;
+
+        size_t page_offset = offset & ~(0xFFF);
+        size_t start_offset = offset & 0xFFF;
+        
+        void *page = cache->write_page(page_offset);
+        memcpy((char *) page + start_offset, buf, len);
+
+        page_offset = (offset / memory::page_size) + 1;
+        auto page_count = (len / memory::page_size);
+        for (size_t i = 1; i < page_count; i++) {
+            page = cache->write_page((page_offset + i) * memory::page_size);
+            memcpy(page, (char *) buf + (i * memory::page_size), memory::page_size);
+        }
+
+        auto end_offset = len % memory::page_size;
+        if (page_count && end_offset) {
+            page = cache->write_page(offset + len);
+            memcpy(page, (char *) buf + (page_count * memory::page_size), end_offset);            
+        }
+
+        return len;
     }
 
     return device->write(buf, len, offset);
@@ -104,14 +255,10 @@ ssize_t vfs::devfs::ioctl(node *file, size_t req, void *buf) {
     auto private_data = (dev_priv *) file->private_data;
     if (!private_data) return -ENOENT;
 
-    devfs::device *device = private_data->dev;
+    devfs::filedev *device = (filedev *) private_data->dev;
     if (!device) return -ENOENT;
 
     switch (req) {
-        case BLKRRPART:
-            if (!device->is_blockdev) return -1;
-            device->blockdev.part_list.clear();
-            return part::probe(device);
         default:
             return device->ioctl(req, buf);
     }
@@ -121,17 +268,32 @@ void *vfs::devfs::mmap(node *file, void *addr, size_t len, off_t offset) {
     auto private_data = (dev_priv *) file->private_data;
     if (!private_data) return nullptr;
 
-    devfs::device *device = private_data->dev;
+    devfs::filedev *device = (filedev *) private_data->dev;
     if (!device) return nullptr;
 
-    if (device->is_blockdev) {
+    if (device->cls == device_class::BLOCKDEV) {
+        devfs::blockdev *blockdev = (devfs::blockdev *) device;
+        if ((offset + len) % blockdev->block_size != 0) return nullptr;
+
         if (private_data->part >= 0) {
-            auto part = device->blockdev.part_list.data()[private_data->part];
-            return device->mmap(file, addr, len, offset + (part.begin * device->blockdev.block_size));
+            auto part = blockdev->part_list.data()[private_data->part];
+            return nullptr;
+            //return device->mmap(file, addr, len, offset + (part.begin * blockdev->block_size));
         }
     }
 
-    return device->mmap(file, addr, len, offset);
+    return nullptr;
+    //return device->mmap(file, addr, len, offset);
+}
+
+ssize_t vfs::devfs::poll(node *file, sched::thread *thread) {
+    auto private_data = (dev_priv *) file->private_data;
+    if (!private_data) return -ENOENT;
+
+    devfs::filedev *device = (filedev *) private_data->dev;
+    if (!device) return -ENOENT;
+
+    return device->poll(thread);
 }
 
 ssize_t vfs::devfs::mkdir(node *dst, frg::string_view name, int64_t flags, mode_t mode,

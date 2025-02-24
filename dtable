@@ -1,0 +1,13 @@
+major 0x9 AHCI
+major 0xF SELF_TTY
+major 0xA3 PTMX
+
+pci ? ? 0x01 0x06 0x01 pci::ahci::matcher 0xA AHCIBUS
+pci 0x8086 0x100E ? ? ? pci::net::matcher 0xB NET
+none fb::matcher 0xD FB
+none kb::matcher 0xE KB
+
+none tty::ptm::matcher 0xA1 PTM
+none tty::pts::matcher 0xA2 PTS
+
+none vt::matcher 0xA4 VT

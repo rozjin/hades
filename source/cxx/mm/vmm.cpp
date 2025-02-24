@@ -14,14 +14,14 @@ int64_t *refs = nullptr;
 uint64_t refs_len = 0;
 
 vmm::vmm_ctx *vmm::boot = nullptr;
-util::lock vmm_lock{};
+util::spinlock vmm_lock{};
 
 static log::subsystem logger = log::make_subsystem("VM");
 // API Functions
 void vmm::init() {
-    refs_len = memory::pmm::nr_pages * sizeof(int64_t);
+    refs_len = pmm::nr_pages * sizeof(int64_t);
     refs = (int64_t *) kmalloc(refs_len);
-    for (size_t i = 0; i < memory::pmm::nr_pages; i++) {
+    for (size_t i = 0; i < pmm::nr_pages; i++) {
         refs[i] = -1;
     }
 
@@ -35,14 +35,14 @@ void vmm::init() {
         map_single_2m(addr, phys, page_flags::PRESENT, boot->page_map);
     }
 
-    if (memory::pmm::nr_pages * memory::page_size < limit_4g) {
+    if (pmm::nr_pages * memory::page_size < limit_4g) {
         for (size_t i = 0; i < limit_4g / memory::page_large; i++) {
             void *phys = (void *) (i * memory::page_large);
             void *addr = (void *) (memory::x86::virtualBase + (i * memory::page_large));
             map_single_2m(addr, phys, page_flags::PRESENT | page_flags::WRITE, boot->page_map);
         }
     } else {
-        for (size_t i = 0; i < ((memory::pmm::nr_pages) * memory::page_size) / memory::page_large; i++) {
+        for (size_t i = 0; i < ((pmm::nr_pages) * memory::page_size) / memory::page_large; i++) {
             void *phys = (void *) (i * memory::page_large);
             void *addr = (void *) (memory::x86::virtualBase + (i * memory::page_large));
             map_single_2m(addr, phys, page_flags::PRESENT | page_flags::WRITE, boot->page_map);

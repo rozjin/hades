@@ -1,11 +1,21 @@
 #include "arch/types.hpp"
+#include "fs/cache.hpp"
+#include "util/lock.hpp"
 #include <driver/video/vesa.hpp>
 #include <util/log/qemu.hpp>
 #include <util/log/serial.hpp>
 #include <util/log/log.hpp>
 #include <cstdarg>
 #include <cstddef>
-#include <cstdint>
+
+#define NANOPRINTF_USE_FIELD_WIDTH_FORMAT_SPECIFIERS 1
+#define NANOPRINTF_USE_PRECISION_FORMAT_SPECIFIERS 1
+#define NANOPRINTF_USE_FLOAT_FORMAT_SPECIFIERS 0
+#define NANOPRINTF_USE_LARGE_FORMAT_SPECIFIERS 1
+#define NANOPRINTF_USE_BINARY_FORMAT_SPECIFIERS 1
+#define NANOPRINTF_USE_WRITEBACK_FORMAT_SPECIFIERS 0
+#define NANOPRINTF_IMPLEMENTATION
+#include <util/log/nanoprintf.h>
 
 static constexpr auto num_buf_len = 48;
 char num_buf[num_buf_len];
@@ -14,7 +24,7 @@ constexpr size_t KMSG_MAX = (1 << 16);
 char kmsg_buf[KMSG_MAX];
 
 size_t cur_pointer = 0;
-void write_log(char c) {
+void write_log(int c, void *_) {
     kmsg_buf[cur_pointer++] = c;
     if (cur_pointer >= KMSG_MAX) {
         cur_pointer = 0;
@@ -23,12 +33,6 @@ void write_log(char c) {
     ports::qemu::write_log(c);
     ports::serial::write_log(c);
     video::vesa::write_log(c);
-}
-
-void write_log(const char *str) {
-    while(*str) {
-        write_log(*str++);
-    }
 }
 
 const char *level_string(log::level level) {
@@ -66,150 +70,70 @@ log::subsystem log::make_subsystem(const char *prefix) {
 }
 
 void write_subsystem(log::subsystem subsystem, log::level level) {
-    write_log('[');
-    write_log(level_string(level));
-    write_log(':');
-    
-    write_log(subsystem.prefix);
-    write_log(']');
-    write_log(' ');
+    npf_pprintf(&write_log, nullptr, "[%s]: %s ", level_string(level), subsystem.prefix);
 }
 
-util::lock log_lock{};
-
-void write_msg(const char *fmt, va_list args) {
-    while (*fmt) {
-        if (*fmt == '%') {
-            fmt++;
-            if (*fmt == '%') {
-                write_log('%');
-            } else if (*fmt == 'c') {
-                int c = va_arg(args, int);
-                write_log(c);
-            } else if (*fmt == 's') {
-                char *str = va_arg(args, char *);
-                while (*str) {
-                    write_log(*str++);
-                }
-            } else if (*fmt == 'd' || *fmt == 'i') {
-                uint32_t val = va_arg(args, uint32_t);
-                auto decimal = util::num_fmt(num_buf, num_buf_len, val, 10, 0, ' ', ((int32_t) val > 0) ? 0 : 1, 0, -1);
-                while (*decimal) {
-                    write_log(*decimal++);
-                }
-            } else if (*fmt == 'u') {
-                uint32_t val = va_arg(args, uint32_t);
-                auto decimal = util::num_fmt(num_buf, num_buf_len, val, 10, 0, ' ', 0, 0, -1);
-                while (*decimal) {
-                    write_log(*decimal++);
-                }
-            } else if (*fmt++ == 'l') {
-                if (*fmt == 'x') {
-                    uint64_t val = va_arg(args, uint64_t);
-                    auto pointer = util::num_fmt(num_buf, num_buf_len, val, 16, 0, ' ', 0, 0, 16);
-                    while (*pointer) {
-                        write_log(*pointer++);
-                    }
-                } else if (*fmt == 'u') {
-                    uint64_t val = va_arg(args, uint64_t);
-                    auto decimal = util::num_fmt(num_buf, num_buf_len, val, 10, 0, ' ', 0, 0, -1);
-                    while (*decimal) {
-                        write_log(*decimal++);
-                    }
-                } else if (*fmt == 'd') {
-                    uint64_t val = va_arg(args, uint64_t);
-                    auto decimal = util::num_fmt(num_buf, num_buf_len, val, 10, 0, ' ', ((int64_t) val > 0) ? 0 : 1, 0, -1);
-                    while (*decimal) {
-                        write_log(*decimal++);
-                    }                    
-                }
-            } else if (*fmt++ == 'x') {
-                uint32_t val = va_arg(args, uint32_t);
-                auto pointer = util::num_fmt(num_buf, num_buf_len, val, 16, 0, ' ', 0, 0, 16);
-                while (*pointer) {
-                    write_log(*pointer++);
-                }
-            } else if (*fmt++ == 'X') {
-                uint64_t val = va_arg(args, uint64_t);
-                auto pointer = util::num_fmt(num_buf, num_buf_len, val, 16, 0, ' ', 0, 1, 16);
-                while (*pointer) {
-                    write_log(*pointer++);
-                }
-            }
-        } else {
-            write_log(*fmt);
-        }
-
-        fmt++;
-    }
-}
-
+util::spinlock log_lock{};
 void kmsg(log::subsystem subsystem, log::level level, const char *fmt, ...) {
-    log_lock.irq_acquire();
+    util::lock_guard guard{log_lock};
 
     write_subsystem(subsystem, level);
 
     va_list args;
     va_start(args, fmt);
 
-    write_msg(fmt, args);
+    npf_vpprintf(&write_log, nullptr, fmt, args);
+    write_log('\n', nullptr);
 
-    write_log('\n');
     va_end(args);
-
-    log_lock.irq_release();
 }
 
 void kmsg(log::subsystem subsystem, const char *fmt, ...) {
-    log_lock.irq_acquire();
+    util::lock_guard guard{log_lock};
 
     write_subsystem(subsystem, log::level::INFO);
 
     va_list args;
     va_start(args, fmt);
 
-    write_msg(fmt, args);
+    npf_vpprintf(&write_log, nullptr, fmt, args);
+    write_log('\n', nullptr);
 
-    write_log('\n');
     va_end(args);
-
-    log_lock.irq_release();
 }
 
 static log::subsystem debug_logger = log::make_subsystem("DEBUG");
 void debug(const char *fmt, ...) {
-    log_lock.irq_acquire();
+    util::lock_guard guard{log_lock};
 
     write_subsystem(debug_logger, log::level::INFO);
 
     va_list args;
     va_start(args, fmt);
 
-    write_msg(fmt, args);
+    npf_vpprintf(&write_log, nullptr, fmt, args);
+    write_log('\n', nullptr);
 
-    write_log('\n');
     va_end(args);
 
-    log_lock.irq_release();
 }
 
 void panic(const char *fmt, ...) {
     arch::irq_off();
     arch::stop_all_cpus();
+    
+    cache::halt_sync();
+    util::lock_guard guard{log_lock};
 
-    log_lock.irq_acquire();
-
-    write_log("[PANIC]");
+    npf_pprintf(&write_log, nullptr, "[PANIC]: Not syncing");
 
     va_list args;
     va_start(args, fmt);
 
-    write_msg(fmt, args);
+    npf_vpprintf(&write_log, nullptr, fmt, args);
+    write_log('\n', nullptr);
 
-    write_log('\n');
     va_end(args);
-
-    log_lock.irq_release();
-
+    
     arch::stall_cpu();    
 }

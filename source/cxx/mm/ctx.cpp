@@ -1,4 +1,5 @@
 #include "mm/common.hpp"
+#include "util/lock.hpp"
 #include <arch/vmm.hpp>
 #include <arch/x86/types.hpp>
 #include <cstddef>
@@ -199,8 +200,8 @@ void vmm::vmm_ctx::split_hole(hole *node, uint64_t offset, size_t len) {
     frg::destruct(memory::mm::heap, node);
 }
 
-union vmm::vmm_ctx::mapping::mapping_perms vmm::vmm_ctx::flags_to_perms(vmm::map_flags flags) {
-    mapping::mapping_perms res {.number = 0};
+vmm::vmm_ctx::mapping::mapping_perms vmm::vmm_ctx::flags_to_perms(vmm::map_flags flags) {
+    mapping::mapping_perms res {};
 
     if ((uint64_t) (flags & map_flags::READ))
         res.read = 1;
@@ -232,7 +233,7 @@ void *vmm::vmm_ctx::create_mapping(void *addr, uint64_t len, map_flags flags, bo
     }
 
     for (size_t i = 0; i < memory::page_count(len); i++) {
-        void *phys = fill_now ? memory::pmm::phys(1) : nullptr;
+        void *phys = fill_now ? pmm::phys(1) : nullptr;
        /* if (fill_now) {
             vmm::ref[phys] = 1;
         } */
@@ -246,26 +247,6 @@ void *vmm::vmm_ctx::create_mapping(void *addr, uint64_t len, map_flags flags, bo
 
     this->mappings.insert(node);
     return dst;
-}
-
-void vmm::vmm_ctx::copy_mappings(vmm::vmm_ctx *other) {
-    mapping *current = other->mappings.first();
-    while (current) {
-        mapping *node = frg::construct<mapping>(memory::mm::heap, current->addr, current->len, page_map);
-
-        this->create_hole(current->addr, current->len);
-        node->perms = current->perms;
-        this->mappings.insert(node);
-
-        for (void *inner = current->addr; inner <= ((char *) current->addr + current->len); inner = (char *) inner + memory::page_size) {
-            void *phys = resolve_single_4k(inner, other->page_map);
-            page_flags perms = resolve_perms_4k(inner, other->page_map);
-
-            map_single_4k(inner, phys, perms, page_map);
-        }
-
-        current = other->mappings.successor(current);
-    }
 }
 
 vmm::vmm_ctx::mapping *vmm::vmm_ctx::get_mapping(void *addr) {
@@ -293,7 +274,7 @@ void vmm::vmm_ctx::unmap_pages(void *addr, size_t len, bool free_pages) {
        /*     if (phys) {
                 vmm::ref[phys]--;
                 if (vmm::ref[phys] == 0) {
-                    memory::pmm::free(memory::add_virt(phys));
+                    pmm::free(memory::add_virt(phys));
                 }
             } */
         }
@@ -438,7 +419,7 @@ void vmm::vmm_ctx::modify(void *virt, uint64_t len, map_flags flags) {
 }
 
 vmm::vmm_ctx *vmm::vmm_ctx::fork() {
-    lock.irq_acquire();
+    util::lock_guard guard{lock};
 
     auto new_ctx = frg::construct<vmm_ctx>(memory::mm::heap);
 
@@ -446,39 +427,37 @@ vmm::vmm_ctx *vmm::vmm_ctx::fork() {
     new_ctx->setup_hole();
     copy_boot_map(new_ctx->page_map);
     
-    new_ctx->copy_mappings(this);
-
-    vmm_ctx::mapping *current = new_ctx->mappings.first();
+    mapping *current = mappings.first();
     while (current) {
-        if (current->perms.shared)
-            goto skip;
-        
-        for (void *addr = current->addr; addr <= (void *) ((char *) current->addr + current->len); addr = ((char *) addr + memory::page_size)) {
-            void *prev_phys = resolve_single_4k(addr, new_ctx->page_map);
-            page_flags perms = resolve_perms_4k(addr, new_ctx->page_map);
+        mapping *node = frg::construct<mapping>(memory::mm::heap, current->addr, current->len, page_map);
+
+        new_ctx->create_hole(current->addr, current->len);
+        node->perms = current->perms;
+        new_ctx->mappings.insert(node);
+
+        for (void *inner = current->addr; inner <= ((char *) current->addr + current->len); inner = (char *) inner + memory::page_size) {
+            void *phys = resolve_single_4k(inner, page_map);
+            page_flags perms = resolve_perms_4k(inner, page_map);
 
             if (current->perms.write) {
-                void *phys = memory::pmm::phys(1);
-                memcpy(memory::add_virt(phys), memory::add_virt(prev_phys), memory::page_size);
-
-                remap_single_4k(addr, phys, perms, new_ctx->page_map);
-            } else {
                 perms &= ~(page_flags::WRITE);
                 perms |= page_flags::COW;
 
-                perms_single_4k(addr, perms, new_ctx->page_map);
-                perms_single_4k(addr, perms, page_map);
+                map_single_4k(inner, phys, perms, new_ctx->page_map);
+                perms_single_4k(inner, perms, page_map);
+            } else if (current->perms.read) {
+                void *new_phys = pmm::phys(1);
+                memcpy(memory::add_virt(new_phys), memory::add_virt(phys), memory::page_size);
+
+                map_single_4k(inner, new_phys, perms, new_ctx->page_map);
             }
 
-         //   vmm::ref[phys]++;
-            shootdown(addr);
+            shootdown(inner);
         }
 
-        skip:
-        current = new_ctx->mappings.successor(current);
+        current = mappings.successor(current);
     }
 
-    lock.irq_release();
     return new_ctx;
 }
 

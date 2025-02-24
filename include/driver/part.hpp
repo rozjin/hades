@@ -62,7 +62,7 @@ namespace part {
         };
     }
 
-    size_t probe(vfs::devfs::device *dev);
+    size_t probe(vfs::devfs::blockdev *dev);
 }
 
 #endif

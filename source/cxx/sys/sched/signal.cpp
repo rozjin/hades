@@ -1,23 +1,25 @@
 #include "arch/vmm.hpp"
+#include "arch/x86/smp.hpp"
 #include "arch/x86/types.hpp"
 #include "fs/vfs.hpp"
 #include "mm/common.hpp"
 #include "mm/mm.hpp"
 #include "mm/pmm.hpp"
 #include "mm/vmm.hpp"
-#include "sys/sched/wait.hpp"
+#include "sys/sched/event.hpp"
+#include "util/lock.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <sys/sched/signal.hpp>
 #include <sys/sched/sched.hpp>
 
-int sched::signal::do_sigaction(process *proc, thread *task, int sig, sched::signal::sigaction *act, sigaction *old) {
+int sched::signal::do_sigaction(process *proc, thread *task, int sig, sigaction *act, sigaction *old) {
     if (!is_valid(sig) || (sig == SIGKILL || sig == SIGSTOP)) {
         arch::set_errno(EINVAL);
         return -1;
     }
 
-    proc->sig_lock.irq_acquire();
+    util::lock_guard sig_guard{proc->sig_lock};
 
     auto cur_action = &proc->sigactions[sig - 1];
     if (old) {
@@ -30,33 +32,29 @@ int sched::signal::do_sigaction(process *proc, thread *task, int sig, sched::sig
 
         auto proc_ctx = &proc->sig_ctx;
         auto ctx = &task->sig_ctx;
-        proc_ctx->lock.irq_acquire();
-        ctx->lock.irq_acquire();
+
+        util::lock_guard proc_guard{proc_ctx->lock};
+        util::lock_guard ctx_guard{ctx->lock};
 
         if (act->handler.sa_sigaction == SIG_IGN && ctx->sigpending & (1ull << sig)) {
             proc_ctx->sigpending &= ~(1 << sig);
             ctx->sigpending &= ~(1 << sig);
         }
-
-        proc_ctx->lock.irq_release();
-        ctx->lock.irq_release();
     }
-
-    proc->sig_lock.irq_release();
 
     return 0;
 }
 
 void sched::signal::do_sigpending(thread *task, sigset_t *set) {
     auto ctx = &task->sig_ctx;
-    ctx->lock.irq_acquire();
+    util::lock_guard ctx_guard{ctx->lock};
+
     *set = ctx->sigpending;
-    ctx->lock.irq_release();
 }
 
 int sched::signal::do_sigprocmask(thread *task, int how, sigset_t *set, sigset_t *oldset) {
     auto ctx = &task->sig_ctx;
-    ctx->lock.irq_acquire();
+    util::lock_guard ctx_guard{ctx->lock};
 
     if (oldset) {
         *oldset = ctx->sigmask;
@@ -75,14 +73,11 @@ int sched::signal::do_sigprocmask(thread *task, int how, sigset_t *set, sigset_t
                 break;
             default:
                 arch::set_errno(EINVAL);
-                ctx->lock.irq_release();
                 return -1;
         }
     }
 
     ctx->sigmask &= ~(SIGMASK(SIGKILL) | SIGMASK(SIGSTOP));
-    ctx->lock.irq_release();
-
     return 0;
 }
 
@@ -127,24 +122,13 @@ int sched::signal::do_kill(pid_t pid, int sig) {
 
 int sched::signal::wait_signal(thread *task, sigset_t sigmask, sched::timespec *time) {
     auto ctx = &task->sig_ctx;
-    if (time) {
-        ctx->waitq->set_timer(time);
-    }
+    util::lock_guard ctx_guard{ctx->lock};
 
-    ctx->lock.irq_acquire();
     for (size_t i = 1; i <= SIGNAL_MAX; i++) {
-        if (sigmask & SIGMASK(i)) {
-            auto signal = &ctx->queue[i - 1];
-            ctx->sigdelivered &= ~SIGMASK(i);
-
-            if (signal->notify_queue == nullptr) {
-                signal->notify_queue = frg::construct<ipc::trigger>(memory::mm::heap);
-                signal->notify_queue->add(ctx->waitq);
-            }
-        }
+        if (sigmask & SIGMASK(i)) ctx->sigdelivered &= ~SIGMASK(i);
     }
-    ctx->lock.irq_release();
 
+    ctx_guard.~lock_guard();
     for (;;) {
         for (size_t i = 1; i <= SIGNAL_MAX; i++) {
             if (ctx->sigdelivered & SIGMASK(i)) {
@@ -153,8 +137,8 @@ int sched::signal::wait_signal(thread *task, sigset_t sigmask, sched::timespec *
             }
         }
 
-        auto [waker, got_signal] = ctx->waitq->block(arch::get_thread());
-        if (got_signal) {
+        auto [evt, _] = ipc::receive({ SIGNAL }, true, time);
+        if (evt < 0) {
             return -1;
         }
     }
@@ -195,28 +179,21 @@ bool sched::signal::send_process(process *sender, process *target, int sig) {
 
     auto ctx = &target->sig_ctx;
 
-    target->sig_lock.irq_acquire();
-    ctx->lock.irq_acquire();
+    util::lock_guard sig_guard{target->sig_lock};
+    util::lock_guard guard{ctx->lock};
 
     if (sender != nullptr && !check_perms(sender, target)) {
         arch::set_errno(EPERM);
-        ctx->lock.irq_release();
-        target->sig_lock.irq_release();
         return false;
     }
 
     if (sig != SIGKILL && sig != SIGSTOP) {
         if (target->sigactions[sig - 1].handler.sa_sigaction == SIG_IGN) {
-            ctx->lock.irq_release();
-            target->sig_lock.irq_release();
             return true;
         }
     }
 
     ctx->sigpending |= SIGMASK(sig);
-
-    ctx->lock.irq_release();
-    target->sig_lock.irq_release();
     return true;
 }
 
@@ -243,17 +220,13 @@ int sched::signal::issue_signals(process *proc) {
             auto task_ctx = &task->sig_ctx;
             auto signal = &task_ctx->queue[i - 1];
 
-            proc->sig_lock.irq_acquire();
-            task_ctx->lock.irq_acquire();
+            util::lock_guard sig_guard{proc->sig_lock};
+            util::lock_guard task_guard{task_ctx->lock};
 
             proc_ctx->sigpending &= ~SIGMASK(i);
             task_ctx->sigpending |= SIGMASK(i);
 
             signal->signum = i;
-            signal->notify_queue = frg::construct<ipc::trigger>(memory::mm::heap);
-
-            task_ctx->lock.irq_release();
-            proc->sig_lock.irq_release();            
         }
     }
 
@@ -272,12 +245,10 @@ int sched::signal::dispatch_signals(process *proc, thread *task) {
             auto task_ctx = &task->sig_ctx;
             auto signal = &task_ctx->queue[i - 1];
 
-            proc->sig_lock.irq_acquire();
-            task_ctx->lock.irq_acquire();
+            util::lock_guard sig_guard{proc->sig_lock};
+            util::lock_guard task_guard{task_ctx->lock};
 
             if (task->sig_ctx.sigmask & SIGMASK(i)) {
-                task_ctx->lock.irq_release();
-                proc->sig_lock.irq_release();            
                 continue;
             }
 
@@ -286,19 +257,14 @@ int sched::signal::dispatch_signals(process *proc, thread *task) {
 
             auto action = &proc->sigactions[i - 1];
             if (action->handler.sa_sigaction == SIG_ERR) {
-                task_ctx->lock.irq_release();
-                proc->sig_lock.irq_release();
-
                 return -1;
             } else if (action->handler.sa_sigaction == SIG_IGN) {
-                task_ctx->lock.irq_release();
-                proc->sig_lock.irq_release();
                 continue;
             }
 
             task->dispatch_ready = true;
             if (action->handler.sa_sigaction == SIG_DFL) {
-                auto stack = memory::pmm::stack(4);
+                auto stack = pmm::stack(x86::initialStackSize);
 
                 task->ucontext.stack = (uint64_t) stack;
                 
@@ -307,11 +273,6 @@ int sched::signal::dispatch_signals(process *proc, thread *task) {
                 auto tmp = task->kstack;
                 task->kstack = task->sig_kstack;
                 task->sig_kstack = tmp;
-
-                task->sig_ustack = task->ustack;
-
-                task_ctx->lock.irq_release();
-                proc->sig_lock.irq_release();
 
                 return 0;
             }
@@ -329,9 +290,6 @@ int sched::signal::dispatch_signals(process *proc, thread *task) {
             task->ustack = stack;
             task->sig_ustack = tmp;
 
-            task_ctx->lock.irq_release();
-            proc->sig_lock.irq_release();
-
             return 0;
         }
     }
@@ -341,15 +299,14 @@ int sched::signal::dispatch_signals(process *proc, thread *task) {
 
 int sched::signal::process_signals(process *proc, thread *task) {
     auto proc_ctx = &proc->sig_ctx;
-    proc_ctx->lock.irq_acquire();
+
+    util::lock_guard proc_guard{proc_ctx->lock};
 
     issue_signals(proc);
     if (dispatch_signals(proc, task) < 0) {
-        proc_ctx->lock.irq_release();
         return -1;
     }
     
-    proc_ctx->lock.irq_release();
     return 0;
 }
 
@@ -359,13 +316,12 @@ bool sched::signal::is_blocked(thread *task, int sig) {
     }
 
     auto ctx = &task->sig_ctx;
-    ctx->lock.irq_acquire();
+    util::lock_guard ctx_guard{ctx->lock};
+
     if (ctx->sigmask & SIGMASK(sig)) {
-        ctx->lock.irq_release();
         return false;
     }
 
-    ctx->lock.irq_release();
     return true;
 }
 
@@ -375,13 +331,12 @@ bool sched::signal::is_ignored(process *proc, int sig) {
     }
 
     auto ctx = &proc->sig_ctx;
-    ctx->lock.irq_acquire();
+    util::lock_guard ctx_guard{ctx->lock};
+
     sigaction *act = &proc->sigactions[sig - 1];
     if (act->handler.sa_sigaction == SIG_IGN) {
-        ctx->lock.irq_release();
         return true;
     }
 
-    ctx->lock.irq_release();
     return false;
 }

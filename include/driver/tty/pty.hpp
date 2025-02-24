@@ -8,15 +8,9 @@
 #include <util/lock.hpp>
 
 namespace tty {
-    constexpr size_t ptmx_major = 5;
-    constexpr size_t ptmx_minor = 2;
-
-    constexpr size_t pts_major = 136;
-
     struct ptm;
     struct pts: driver {
         private:
-            size_t slave_no;
             device *tty;
             ptm *master;
             winsize size;
@@ -24,29 +18,45 @@ namespace tty {
             friend struct ptmx;
             friend struct ptm;
 
+            struct matcher: vfs::devfs::matcher {
+                matcher(): vfs::devfs::matcher("true",
+                nullptr, "pts", false, 0) {}
+            };
+
             ssize_t ioctl(device *tty, size_t req, void *buf) override; 
             void flush(tty::device *tty) override;
     };
 
-    struct ptm: vfs::devfs::device {
+    struct ptm: vfs::devfs::chardev {
         private:
-            util::lock in_lock;
+            util::spinlock in_lock;
             util::ring<char> in;
             pts *slave;
         public:
             friend struct ptmx;
             friend struct pts;
 
-            ptm(): in_lock(), in(max_chars), slave(nullptr) {};
+            struct matcher: vfs::devfs::matcher {
+                matcher(): vfs::devfs::matcher(false,
+                nullptr, nullptr, false, 0) {}
+            };
+
+            ptm(vfs::devfs::busdev *bus, ssize_t major, ssize_t minor, void *aux): 
+                chardev(bus, major, minor, aux),
+                in_lock(), in(max_chars) {
+                slave = (pts *) aux;
+            };
             ssize_t read(void *buf, size_t len, size_t offset) override;
             ssize_t write(void *buf, size_t len, size_t offset) override; 
             ssize_t ioctl(size_t req, void *buf) override;        
     };
 
-    struct ptmx: vfs::devfs::device {
-        public:
-            static void init();
-            ssize_t on_open(vfs::fd *fd, ssize_t flags) override;
+    struct ptmx: vfs::devfs::chardev {
+        static void init();
+        ssize_t on_open(vfs::fd *fd, ssize_t flags) override;
+
+        ptmx(vfs::devfs::busdev *bus, ssize_t major, ssize_t minor, void *aux):
+            chardev(bus, major, minor, aux) {}
     };
 };
 

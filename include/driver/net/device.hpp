@@ -1,19 +1,28 @@
 #ifndef NET_DEVICE_HPP
 #define NET_DEVICE_HPP
 
-#include "driver/net/ip.hpp"
+#include "fs/dev.hpp"
+#include "util/types.hpp"
 #include <frg/hash_map.hpp>
 #include <frg/rcu_radixtree.hpp>
 #include <driver/net/types.hpp>
 #include <mm/mm.hpp>
 
 namespace net {
+    struct setup_args {
+        vfs::devfs::bus_space *flash_space;
+        vfs::devfs::bus_space *reg_space;
+        int irq;
+        int flags;
+    };
+
     class device {
         public:
             frg::hash_map<uint32_t, uint8_t *, frg::hash<uint32_t>, memory::mm::heap_allocator> arp_table;
             frg::vector<net::route, memory::mm::heap_allocator> ipv4_routing_table;
 
-            frg::hash_map<uint32_t, ipc::trigger *, frg::hash<uint32_t>,  memory::mm::heap_allocator> pending_arps;
+            frg::hash_map<uint32_t, frg::vector<tid_t, memory::mm::heap_allocator>, 
+                frg::hash<uint32_t>,  memory::mm::heap_allocator> pending_arps;
 
             // TODO: IP Fragmemtation
             net::mac mac;

@@ -9,7 +9,7 @@
 
 namespace vmm {
     vmm_ctx_map new_pagemap() {
-        vmm_ctx_map map = (uint64_t *) memory::pmm::alloc(1);
+        vmm_ctx_map map = (uint64_t *) pmm::alloc(1);
         return map;
     }
 
@@ -157,7 +157,7 @@ namespace vmm {
         if (p4[p4idx] & (uint64_t) page_flags::PRESENT) {
             p3 = (uint64_t *) memory::add_virt(p4[p4idx] & x86::addr_mask);
         } else {
-            p3 = (uint64_t *) memory::pmm::phys(1);
+            p3 = (uint64_t *) pmm::phys(1);
             p4[p4idx] = (uint64_t) p3 | (uint64_t) page_flags::PRESENT | (uint64_t) page_flags::USER | (uint64_t) page_flags::WRITE;
             p3 = (uint64_t *) memory::add_virt(p3);
         }
@@ -165,7 +165,7 @@ namespace vmm {
         if (p3[p3idx] & (uint64_t) page_flags::PRESENT) {
             p2 = (uint64_t *) memory::add_virt(p3[p3idx] & x86::addr_mask);
         } else {
-            p2 = (uint64_t *) memory::pmm::phys(1);
+            p2 = (uint64_t *) pmm::phys(1);
             p3[p3idx] = (uint64_t) p2 | (uint64_t) page_flags::PRESENT | (uint64_t) page_flags::USER | (uint64_t) page_flags::WRITE;
             p2 = (uint64_t *) memory::add_virt(p2);
         }
@@ -173,7 +173,7 @@ namespace vmm {
         if (p2[p2idx] & (uint64_t) page_flags::PRESENT) {
             p1 = (uint64_t *) memory::add_virt(p2[p2idx] & x86::addr_mask);
         } else {
-            p1 = (uint64_t *) memory::pmm::phys(1);
+            p1 = (uint64_t *) pmm::phys(1);
             p2[p2idx] = (uint64_t) p1 | (uint64_t) page_flags::PRESENT | (uint64_t) page_flags::USER | (uint64_t) page_flags::WRITE;
             p1 = (uint64_t *) memory::add_virt(p1);
         }
@@ -195,7 +195,7 @@ namespace vmm {
         if (p4[p4idx] & (uint64_t) page_flags::PRESENT) {
             p3 = (uint64_t *) memory::add_virt(p4[p4idx] & x86::addr_mask);
         } else {
-            p3 = (uint64_t *) memory::pmm::phys(1);
+            p3 = (uint64_t *) pmm::phys(1);
             p4[p4idx] = (uint64_t) p3 | (uint64_t) page_flags::PRESENT | (uint64_t) page_flags::USER | (uint64_t) page_flags::WRITE;
             p3 = (uint64_t *) memory::add_virt(p3);
         }
@@ -203,7 +203,7 @@ namespace vmm {
         if (p3[p3idx] & (uint64_t) page_flags::PRESENT) {
             p2 = (uint64_t *) memory::add_virt(p3[p3idx] & x86::addr_mask);
         } else {
-            p2 = (uint64_t *) memory::pmm::phys(1);
+            p2 = (uint64_t *) pmm::phys(1);
             p3[p3idx] = (uint64_t) p2 | (uint64_t) page_flags::PRESENT | (uint64_t) page_flags::USER | (uint64_t) page_flags::WRITE;
             p2 = (uint64_t *) memory::add_virt(p2);
         }
@@ -422,6 +422,9 @@ namespace vmm {
         if ((uint64_t) (flags & map_flags::DEMAND)) 
             out_flags |= page_flags::DEMAND;
 
+        if ((uint64_t) (flags & map_flags::DIRTY)) 
+            out_flags |= page_flags::DIRTY;
+
         return out_flags;
     }
 
@@ -448,30 +451,28 @@ namespace x86 {
 
         uint64_t faulting_page = faulting_addr & addr_mask;
 
-        ctx->lock.irq_acquire();
-        
+        util::lock_guard guard{ctx->lock};
+
         auto mapping = ctx->get_mapping((void *) faulting_page);
         if (mapping == nullptr) {
             // fake news
-            ctx->lock.irq_release();
             return false;
         }
 
         vmm::page_flags perms = vmm::resolve_perms_4k((void *) faulting_page, ctx->page_map);
         if ((uint64_t) (perms & vmm::page_flags::SHARED)) {
-            ctx->lock.irq_release();
             return false;
         }
 
         if ((uint64_t) (perms & vmm::page_flags::COW)) {
-            void *phys = memory::pmm::phys(1);
+            void *phys = pmm::phys(1);
             void *prev = vmm::resolve_single_4k((void *) faulting_page, ctx->page_map);
             memcpy(memory::add_virt(phys), memory::add_virt(prev), memory::page_size);
 
       //      vmm::ref[phys] = 1;
       //      vmm::ref[prev]--;
       //      if (vmm::ref[prev] == 0) {
-       //         memory::pmm::free(memory::add_virt(prev));
+       //         pmm::free(memory::add_virt(prev));
       //      }
 
             perms &= ~(vmm::page_flags::COW);
@@ -480,13 +481,11 @@ namespace x86 {
             vmm::remap_single_4k((void *) faulting_page, phys, perms, ctx->page_map);
 
             invlpg(faulting_page);
-
-            ctx->lock.irq_release();
             return true;
         }
 
         if ((uint64_t) (perms & vmm::page_flags::DEMAND)) {
-            void *phys = memory::pmm::phys(1);
+            void *phys = pmm::phys(1);
 
             perms &= ~(vmm::page_flags::DEMAND);
             perms |= vmm::page_flags::PRESENT;
@@ -495,12 +494,9 @@ namespace x86 {
     //        vmm::ref[phys] = 1;
 
             invlpg(faulting_page);
-
-            ctx->lock.irq_release();
             return true;
         }
 
-        ctx->lock.irq_release();
         return false;
     }
 }

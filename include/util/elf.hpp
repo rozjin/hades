@@ -126,9 +126,9 @@ namespace elf {
 
         elf64_phdr *phdrs;
         elf64_shdr *shdrs;
-        elf64_shdr *shstrtab_hdrs;
-        elf64_shdr *strtab_hdrs;
-        elf64_shdr *symtab_hdrs;
+        elf64_shdr *shstrtab_hdr;
+        elf64_shdr *strtab_hdr;
+        elf64_shdr *symtab_hdr;
 
         void *shstrtab;
         void *strtab;

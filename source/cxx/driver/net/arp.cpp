@@ -1,7 +1,10 @@
 #include "arch/types.hpp"
 #include "driver/net/device.hpp"
+#include "mm/mm.hpp"
+#include "sys/sched/event.hpp"
 #include "sys/sched/time.hpp"
-#include "sys/sched/wait.hpp"
+#include "sys/sched/event.hpp"
+#include "util/types.hpp"
 #include <cstdint>
 #include <driver/net/protos.hpp>
 #include <driver/net/arp.hpp>
@@ -81,6 +84,11 @@ void net::arp::arp_handle(net::device *dev, void *pkt) {
             memcpy(arp_mac, src_mac, net::eth_alen);
 
             dev->arp_table.insert(src_ip, arp_mac);
+            for (auto tid: dev->pending_arps[src_ip]) {
+                ipc::send({tid}, ARP_FOUND);
+            }
+
+            dev->pending_arps.remove(src_ip);
 
             char ipv4_str[16];
             kmsg(netlog, "%s is at %x:%x:%x:%x:%x:%x", net::ipv4_ntop(src_ip, ipv4_str), src_mac[0], src_mac[1], src_mac[2],
@@ -94,6 +102,8 @@ void net::arp::arp_handle(net::device *dev, void *pkt) {
             uint32_t dest_ip = ntohl(arp_pkt->src_ip);
 
             arp_send(dev, dest_mac, dest_ip);
+
+            break;
         }
     }
 }
@@ -128,20 +138,11 @@ void net::arp::arp_probe(net::device *dev, uint32_t ip) {
 }
 
 void net::arp::arp_wait(net::device *dev, uint32_t ip) {
-    ipc::queue waitq{};
-
-    if (dev->pending_arps.contains(ip)) {
-        ipc::trigger *arp_trigger = *dev->pending_arps.get(ip);
-        arp_trigger->add(&waitq);
-    }  else {
-        ipc::trigger arp_trigger{};
-        arp_trigger.add(&waitq);
-
-        auto timeout = sched::timespec::ms(30000);
-        waitq.set_timer(&timeout);
-
-        dev->pending_arps.insert(ip, &arp_trigger);
+    auto timeout = sched::timespec::ms(30000);
+    if (!dev->pending_arps.contains(ip)) {
+        dev->pending_arps.insert(ip, frg::vector<tid_t, memory::mm::heap_allocator>());
     } 
 
-    waitq.block(arch::get_thread());
+    dev->pending_arps[ip].push(arch::get_tid());
+    ipc::receive({ ARP_FOUND }, false, &timeout);
 }

@@ -9,11 +9,16 @@
 #include <util/log/panic.hpp>
 
 static log::subsystem logger = log::make_subsystem("PM");
-memory::pmm::block *next_block(memory::pmm::block *block) {
-    return (memory::pmm::block *)(((char *) block) + block->sz);
+util::spinlock pmm::pmm_lock{};
+pmm::region* pmm::head = nullptr;
+size_t pmm::nr_pages = 0;
+size_t pmm::nr_usable = 0;
+
+pmm::block *next_block(pmm::block *block) {
+    return (pmm::block *)(((char *) block) + block->sz);
 }
 
-memory::pmm::block *split_block(memory::pmm::block *block, size_t size) {
+pmm::block *split_block(pmm::block *block, size_t size) {
     if (block != nullptr && size != 0) {
         while (size < block->sz) {
             size_t sz = block->sz >> 1;
@@ -31,10 +36,10 @@ memory::pmm::block *split_block(memory::pmm::block *block, size_t size) {
     return nullptr;
 }
 
-memory::pmm::block *find_best(memory::pmm::block *head, memory::pmm::block *tail, size_t size) {
-    memory::pmm::block *best = nullptr;
-    memory::pmm::block *block = head;
-    memory::pmm::block *buddy = next_block(block);
+pmm::block *find_best(pmm::block *head, pmm::block *tail, size_t size) {
+    pmm::block *best = nullptr;
+    pmm::block *block = head;
+    pmm::block *buddy = next_block(block);
 
     if (buddy == tail && block->is_free) {
         return split_block(block, size);
@@ -96,10 +101,10 @@ size_t align_forward(size_t num, size_t align) {
     return p;
 }
 
-size_t align_size(memory::pmm::region *region, size_t size) {
+size_t align_size(pmm::region *region, size_t size) {
     size_t actual_size = region->alignment;
     
-    size += sizeof(memory::pmm::block);
+    size += sizeof(pmm::block);
     size = align_forward(size, region->alignment);
 
     while (size > actual_size) {
@@ -109,10 +114,10 @@ size_t align_size(memory::pmm::region *region, size_t size) {
     return actual_size;
 }
 
-void coalesce_blocks(memory::pmm::block *head, memory::pmm::block *tail) {
+void coalesce_blocks(pmm::block *head, pmm::block *tail) {
     for (;;) {
-        memory::pmm::block *block = head;
-        memory::pmm::block *buddy = next_block(block);
+        pmm::block *block = head;
+        pmm::block *buddy = next_block(block);
 
         bool no_coalesce = true;
         while (block < tail && buddy < tail) {
@@ -140,11 +145,11 @@ void coalesce_blocks(memory::pmm::block *head, memory::pmm::block *tail) {
     }
 }
 
-void *alloc_block(memory::pmm::region *region, size_t size) {
+void *alloc_block(pmm::region *region, size_t size) {
     if (size != 0) {
         size_t actual_size = align_size(region, size);
 
-        memory::pmm::block *found = find_best(region->head, region->tail, actual_size);
+        pmm::block *found = find_best(region->head, region->tail, actual_size);
         if (found == nullptr) {
             coalesce_blocks(region->head, region->tail);
             found = find_best(region->head, region->tail, actual_size);
@@ -162,9 +167,9 @@ void *alloc_block(memory::pmm::region *region, size_t size) {
     return nullptr;
 }
 
-void free_block(memory::pmm::region *region, void *data) {
+void free_block(pmm::region *region, void *data) {
     if (data != nullptr) {
-        memory::pmm::block *block = (memory::pmm::block *)((char *) data + region->alignment);
+        pmm::block *block = (pmm::block *)((char *) data + region->alignment);
         block->is_free = true;
 
         coalesce_blocks(region->head, region->tail);
@@ -181,9 +186,9 @@ size_t nearest_pow2(size_t size, size_t alignment) {
     return 0;
 }
 
-frg::tuple<memory::pmm::region *, size_t> init_region(void *start, size_t size, size_t alignment) {
-    if (alignment < sizeof(memory::pmm::block)) {
-        alignment = sizeof(memory::pmm::block);
+frg::tuple<pmm::region *, size_t> init_region(void *start, size_t size, size_t alignment) {
+    if (alignment < sizeof(pmm::block)) {
+        alignment = sizeof(pmm::block);
     }
 
     size_t region_size = nearest_pow2(size, alignment);
@@ -194,9 +199,9 @@ frg::tuple<memory::pmm::region *, size_t> init_region(void *start, size_t size, 
     start = memory::add_virt(start);
     void *data = ((char *) start) + alignment;
 
-    memory::pmm::region *region = (memory::pmm::region *) start;
+    pmm::region *region = (pmm::region *) start;
     region->has_blocks = true;
-    region->head = (memory::pmm::block *) data;
+    region->head = (pmm::block *) data;
     region->alignment = alignment;
     region->head->sz = region_size;
     region->head->is_free = true;
@@ -205,9 +210,9 @@ frg::tuple<memory::pmm::region *, size_t> init_region(void *start, size_t size, 
     return {region, size - region_size};
 }
 
-void append_region(memory::pmm::region *region, memory::pmm::region **curr) {
-    if (memory::pmm::head == nullptr) {
-        memory::pmm::head = region;
+void append_region(pmm::region *region, pmm::region **curr) {
+    if (pmm::head == nullptr) {
+        pmm::head = region;
         *curr = region;
         region->next = nullptr;
     } else {
@@ -216,21 +221,21 @@ void append_region(memory::pmm::region *region, memory::pmm::region **curr) {
     }
 }
 
-void memory::pmm::init(stivale::boot::tags::region_map *info) {
+void pmm::init(stivale::boot::tags::region_map *info) {
     nr_pages = info->page_count();
 
-    memory::pmm::region *curr = nullptr;
+    pmm::region *curr = nullptr;
     for (size_t i = 0; i < info->entries; i++) {
         auto region = info->regionmap[i];
         if (region.base < 0x100000)
             continue;
         if (region.type == stivale::boot::info::type::USABLE) {
-            nr_usable++;
+            nr_usable += region.length / memory::page_size;
 
-            auto [buddy_region, rest] = init_region((void *) region.base, region.length, page_size);
+            auto [buddy_region, rest] = init_region((void *) region.base, region.length, memory::page_size);
             while (buddy_region != nullptr && rest > 0) {
                 append_region(buddy_region, &curr);
-                auto res = init_region((void *) (region.base + buddy_region->head->sz), rest, page_size);
+                auto res = init_region((void *) (region.base + buddy_region->head->sz), rest, memory::page_size);
                 
                 buddy_region = res.get<0>();
                 rest = res.get<1>();
@@ -238,51 +243,46 @@ void memory::pmm::init(stivale::boot::tags::region_map *info) {
         }
     }
 
-    kmsg(logger, "[PMM] Free memory: %lu bytes", nr_usable * page_size);
+    kmsg(logger, "Free memory: %lu bytes", nr_usable * memory::page_size);
 }
 
-void *memory::pmm::alloc(size_t req_pages) {
-    pmm_lock.acquire();
+void *pmm::alloc(size_t req_pages) {
+    util::lock_guard guard{pmm_lock};
 
     find_region:
         pmm::region *region = pmm::head;
-        while (region && region->next != nullptr && region->head->sz < (req_pages + 1) * page_size && region->has_blocks) {
+        while (region && region->next != nullptr && region->head->sz < (req_pages + 1) * memory::page_size && region->has_blocks) {
             region = region->next;
         }
 
-    auto ret = alloc_block(region, (req_pages + 1) * page_size);
+    auto ret = alloc_block(region, (req_pages + 1) * memory::page_size);
     if (ret == nullptr) {
         goto find_region;
     }
 
     if (ret == nullptr) {
-        panic("[PMM] Out of Memory!");
-        pmm_lock.release();
+        panic("Out of Memory!");
     }
 
     auto alloc = (pmm::allocation *) ret;
-    memset(alloc, 0, (req_pages + 1) * page_size);
+    memset(alloc, 0, (req_pages + 1) * memory::page_size);
     alloc->reg = region;
 
-    pmm_lock.release();
-
-    return ((char *) alloc) + page_size;
+    return ((char *) alloc) + memory::page_size;
 }
 
-void *memory::pmm::stack(size_t req_pages) {
-    return (char *) alloc(req_pages) + (req_pages * page_size);
+void *pmm::stack(size_t req_pages) {
+    return (char *) alloc(req_pages) + (req_pages * memory::page_size);
 }
 
-void *memory::pmm::phys(size_t req_pages) {
-    return (void *) (((uint64_t) alloc(req_pages)) - x86::virtualBase);
+void *pmm::phys(size_t req_pages) {
+    return (void *) (((uint64_t) alloc(req_pages)) - memory::x86::virtualBase);
 }
 
-void memory::pmm::free(void *address) {
-    pmm_lock.acquire();
+void pmm::free(void *address) {
+    util::lock_guard guard{pmm_lock};
 
-    pmm::allocation *alloc = (pmm::allocation *) (((char *) address) - page_size);
+    pmm::allocation *alloc = (pmm::allocation *) (((char *) address) - memory::page_size);
     pmm::region *reg = alloc->reg;
     free_block(reg, alloc);
-
-    pmm_lock.release();
 }

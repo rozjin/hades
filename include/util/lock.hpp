@@ -4,26 +4,31 @@
 #include <arch/types.hpp>
 
 namespace util {
-    class lock {
+    class spinlock {
         private:
             volatile bool _lock;
             bool interrupts;
-        public:
-            void acquire() {
-                while(__atomic_test_and_set(&this->_lock, __ATOMIC_ACQUIRE));
-            }
-            
-            void irq_acquire() {
+        public:            
+            void lock() {
                 interrupts = arch::get_irq_state();
                 arch::irq_off();
                 while(__atomic_test_and_set(&this->_lock, __ATOMIC_ACQUIRE));
             }
 
-            void release() {
+            void lock_noirq() {
+                while(__atomic_test_and_set(&this->_lock, __ATOMIC_ACQUIRE));
+            }
+
+            void unlock_noirq() {
                 __atomic_clear(&this->_lock, __ATOMIC_RELEASE);
             }
 
-            void irq_release() {
+            void await() {
+                lock();
+                unlock();
+            }
+
+            void unlock() {
                 __atomic_clear(&this->_lock, __ATOMIC_RELEASE);
                 if (interrupts) {
                     arch::irq_on();
@@ -32,18 +37,41 @@ namespace util {
                 }
             }
 
-            void await() {
-                acquire();
-                release();
+            spinlock() : _lock(0), interrupts(false) {}
+            spinlock(const spinlock &other) = delete;
+            ~spinlock() {
+                if (this->_lock)
+                    this->unlock();
             }
+    };
 
-            lock() : _lock(0), interrupts(false) { }
+    struct lock_guard {
+        lock_guard(util::spinlock &spinlock)
+        : spinlock{&spinlock}, locked{false} {
+            lock();
+        }
 
-            lock(const lock &other) = delete;
+        lock_guard(const lock_guard &) = delete;
+        lock_guard &operator= (const lock_guard &) = delete;
 
-            ~lock() {
-                this->release();
-            }
+        ~lock_guard() {
+            if(locked)
+                unlock();
+        }
+
+    private:
+        util::spinlock *spinlock;
+        bool locked;
+
+        void lock() {
+            spinlock->lock();
+            locked = true;
+        }
+
+        void unlock() {
+            spinlock->unlock();
+            locked = false;
+        }
     };
 };
 

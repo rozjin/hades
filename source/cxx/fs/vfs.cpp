@@ -1,3 +1,4 @@
+#include "arch/types.hpp"
 #include "fs/ext2.hpp"
 #include "mm/common.hpp"
 #include <sys/sched/sched.hpp>
@@ -58,7 +59,7 @@ vfs::filesystem *vfs::resolve_fs(frg::string_view path, node *base, size_t& syml
         current = base;
     }
 
-    char *symlink_buf = (char *) kmalloc(8192);
+    char *symlink_buf = nullptr;
 
     auto view = adjusted_path;
     ssize_t next_slash;
@@ -68,6 +69,7 @@ vfs::filesystem *vfs::resolve_fs(frg::string_view path, node *base, size_t& syml
         if (auto c = view.sub_string(0, pos); c.size()) {
             if (c == "..") {
                 if (current->parent == nullptr) {
+                    kfree(symlink_buf);
                     return nullptr;
                 }
 
@@ -81,6 +83,7 @@ vfs::filesystem *vfs::resolve_fs(frg::string_view path, node *base, size_t& syml
                 }
 
                 if (next == nullptr || next->resolveable == false) {
+                    kfree(symlink_buf);
                     return current->fs;
                 }
 
@@ -90,17 +93,22 @@ vfs::filesystem *vfs::resolve_fs(frg::string_view path, node *base, size_t& syml
                         break;
                     case node::type::SYMLINK: {
                         if (!next->meta || next->meta->st_size == 0) {
+                            kfree(symlink_buf);
                             return nullptr;
                         }
 
                         if (symlinks_traversed + 1 > 40) {
+                            kfree(symlink_buf);
                             return nullptr;
                         }
+
+                        if (symlink_buf == nullptr) symlink_buf = (char *) kmalloc(8192);
 
                         memset(symlink_buf, 0, 8192);
                         next->fs->read(next, symlink_buf, next->meta->st_size, 0);
                         next = resolve_at(symlink_buf, current, symlinks_traversed);
                         if (next == nullptr) {
+                            kfree(symlink_buf);
                             return current->fs;
                         }
 
@@ -109,6 +117,7 @@ vfs::filesystem *vfs::resolve_fs(frg::string_view path, node *base, size_t& syml
                     }
 
                     default:
+                        kfree(symlink_buf);
                         return next->fs;
                 }
             }
@@ -120,6 +129,7 @@ vfs::filesystem *vfs::resolve_fs(frg::string_view path, node *base, size_t& syml
     node *next = nullptr;
     if (name == "..") {
         if (current->parent == nullptr) {
+            kfree(symlink_buf);
             return nullptr;
         }
 
@@ -132,6 +142,7 @@ vfs::filesystem *vfs::resolve_fs(frg::string_view path, node *base, size_t& syml
         }
 
         if (next == nullptr || next->resolveable == false) {
+            kfree(symlink_buf);
             return nullptr;
         }
     }
@@ -139,24 +150,31 @@ vfs::filesystem *vfs::resolve_fs(frg::string_view path, node *base, size_t& syml
     switch (next->type) {
         case node::type::SYMLINK: {
             if (!next->meta || next->meta->st_size == 0) {
+                kfree(symlink_buf);
                 return nullptr;
             }
 
             if (symlinks_traversed + 1 > 40) {
+                kfree(symlink_buf);
                 return nullptr;
             }
+
+            if (symlink_buf == nullptr) symlink_buf = (char *) kmalloc(8192);
 
             memset(symlink_buf, 0, 8192);
             next->fs->read(next, symlink_buf, next->meta->st_size, 0);
             next = resolve_at(symlink_buf, current, symlinks_traversed);
             if (next == nullptr) {
+                kfree(symlink_buf);
                 return nullptr;
             }
 
+            kfree(symlink_buf);
             return next->fs;
         }
 
         default:
+            kfree(symlink_buf);
             return next->fs;
     }
 }
@@ -183,7 +201,7 @@ vfs::node *vfs::resolve_at(frg::string_view path, node *base, bool follow_symlin
         current = base;
     }
 
-    char *symlink_buf = (char *) kmalloc(8192);
+    char *symlink_buf = nullptr;
 
     auto view = adjusted_path;
     ssize_t next_slash;
@@ -193,6 +211,7 @@ vfs::node *vfs::resolve_at(frg::string_view path, node *base, bool follow_symlin
         if (auto c = view.sub_string(0, pos); c.size()) {
             if (c == "..") {
                 if (current->parent == nullptr) {
+                    kfree(symlink_buf);
                     return nullptr;
                 }
 
@@ -206,6 +225,7 @@ vfs::node *vfs::resolve_at(frg::string_view path, node *base, bool follow_symlin
                 }
 
                 if (next == nullptr || next->resolveable == false) {
+                    kfree(symlink_buf);
                     return nullptr;
                 }
 
@@ -215,17 +235,22 @@ vfs::node *vfs::resolve_at(frg::string_view path, node *base, bool follow_symlin
                         break;
                     case node::type::SYMLINK: {
                         if (!next->meta || next->meta->st_size == 0) {
+                            kfree(symlink_buf);
                             return nullptr;
                         }
 
                         if (symlinks_traversed + 1 > 40) {
+                            kfree(symlink_buf);
                             return nullptr;
                         }
+
+                        if (symlink_buf == nullptr) symlink_buf = (char *) kmalloc(8192);
 
                         memset(symlink_buf, 0, 8192);
                         next->fs->read(next, symlink_buf, next->meta->st_size, 0);
                         next = resolve_at(symlink_buf, current, symlinks_traversed);
                         if (next == nullptr) {
+                            kfree(symlink_buf);
                             return nullptr;
                         }
 
@@ -234,6 +259,7 @@ vfs::node *vfs::resolve_at(frg::string_view path, node *base, bool follow_symlin
                     }
 
                     default:
+                        kfree(symlink_buf);
                         return nullptr;
                 }
             }
@@ -245,6 +271,7 @@ vfs::node *vfs::resolve_at(frg::string_view path, node *base, bool follow_symlin
     node *next = nullptr;
     if (name == "..") {
         if (current->parent == nullptr) {
+            kfree(symlink_buf);
             return nullptr;
         }
 
@@ -257,12 +284,14 @@ vfs::node *vfs::resolve_at(frg::string_view path, node *base, bool follow_symlin
         }
 
         if (next == nullptr || next->resolveable == false) {
+            kfree(symlink_buf);
             return nullptr;
         }
     }
     
     switch (next->type) {
         case node::type::DIRECTORY:
+            kfree(symlink_buf);
             return next;
         case node::type::SYMLINK: {
             if (!follow_symlink) {
@@ -277,17 +306,22 @@ vfs::node *vfs::resolve_at(frg::string_view path, node *base, bool follow_symlin
                 return nullptr;
             }
 
+            if (symlink_buf == nullptr) symlink_buf = (char *) kmalloc(8192);
+
             memset(symlink_buf, 0, 8192);
             next->fs->read(next, symlink_buf, next->meta->st_size, 0);
             next = resolve_at(symlink_buf, current, symlinks_traversed);
             if (next == nullptr) {
+                kfree(symlink_buf);
                 return nullptr;
             }
 
+            kfree(symlink_buf);
             return next;
         }
 
         default:
+            kfree(symlink_buf);
             return next;
     }
 }
@@ -389,6 +423,76 @@ ssize_t vfs::ioctl(vfs::fd *fd, size_t req, void *buf) {
     return desc->node->get_fs()->ioctl(desc->node, req, buf);
 }
 
+ssize_t vfs::poll(pollfd *fds, nfds_t nfds, fd_table *table, sched::timespec *timespec) {
+    frg::vector<vfs::descriptor *, memory::mm::heap_allocator> desc_list{};
+    for (size_t i = 0; i < nfds; i++) {
+        auto pollfd = &fds[i];
+        auto fd = table->fd_list[pollfd->fd];
+
+        if (fd == nullptr) {
+            arch::set_errno(EBADF);
+            return - 1;
+        }
+
+        auto desc = fd->desc;
+        desc_list.push(desc);
+    }
+
+    while (true) {
+        for (size_t i = 0; i < desc_list.size(); i++) {
+            auto desc = desc_list[i];
+
+            vfs::filesystem *fs = nullptr;
+            vfs::pipe *pipe = nullptr;
+            vfs::node *file = nullptr;
+
+            ssize_t status = 0;
+            if (!desc->node) {
+                pipe = desc->pipe;
+                if (desc == pipe->write && pipe->read == nullptr) {
+                    fds[i].revents = POLLERR & fds[i].revents;
+                    continue;
+                } else if (desc == pipe->read && pipe->write == nullptr) {
+                    fds[i].revents = POLLHUP & fds[i].revents;
+                    continue;
+                }
+
+                // TODO: find a more efficient way to do this0
+                while (__atomic_load_n(&pipe->data_written, __ATOMIC_RELAXED) == 0);
+
+                fds[i].revents = (POLLIN | POLLOUT) & fds[i].revents;
+                return 1;
+            } else {
+                fs = desc->node->fs;
+                file = desc->node;
+
+                switch (file->type) {
+                    case node::type::CHARDEV: break;
+                    case node::type::SOCKET: break;
+                    case node::type::FIFO: break;
+                    default: {
+                        fds[i].revents = (POLLIN | POLLOUT) & fds[i].revents;
+                        return 1;
+                    }
+                }
+                
+                status = fs->poll(file, arch::get_thread());
+            }
+
+            if (status < 0) {
+                return -1;
+            }
+            
+            if (status & fds[i].events) {
+                fds[i].revents = status & fds[i].events;
+                return 1;
+            }
+        }
+    }
+
+    return 0;    
+}
+
 vfs::path* vfs::get_absolute(node *node) {
     vfs::node *current = node;
     pathlist paths;
@@ -462,7 +566,6 @@ ssize_t vfs::create(node *base, frg::string_view filepath, fd_table *table, int6
 
 vfs::fd_table *vfs::make_table() {
     auto table = frg::construct<fd_table>(memory::mm::heap);
-    table->lock = util::lock{};
     table->last_fd = 0;
 
     return table;
@@ -473,6 +576,7 @@ vfs::fd_table *vfs::copy_table(fd_table *table) {
     new_table->last_fd = table->last_fd;
 
     for (auto [fd_number, fd]: table->fd_list) {
+        if (fd == nullptr) continue;
         auto desc = fd->desc;
 
         auto new_desc = frg::construct<vfs::descriptor>(memory::mm::heap);
@@ -487,10 +591,7 @@ vfs::fd_table *vfs::copy_table(fd_table *table) {
 
         new_desc->current_ent = 0;
         new_desc->dirent_list = frg::vector<dirent *, memory::mm::heap_allocator>();
-        new_desc->event_trigger = frg::construct<ipc::trigger>(memory::mm::heap);
-        new_desc->status = 0;
 
-        new_fd->lock = util::lock();
         new_fd->desc = new_desc;
         new_fd->table = new_table;
         new_fd->fd_number = fd_number;
@@ -498,6 +599,8 @@ vfs::fd_table *vfs::copy_table(fd_table *table) {
         new_fd->mode = fd->mode;
 
         new_table->fd_list[fd->fd_number] = new_fd;
+
+        if (desc->node) desc->node->ref_count++;
     }
 
     return new_table;
@@ -601,10 +704,7 @@ vfs::fd *vfs::make_fd(vfs::node *node, fd_table *table, int64_t flags, mode_t mo
 
     desc->current_ent = 0;
     desc->dirent_list = frg::vector<dirent *, memory::mm::heap_allocator>();
-    desc->event_trigger = frg::construct<ipc::trigger>(memory::mm::heap);
-    desc->status = 0;
 
-    fd->lock = util::lock();
     fd->desc = desc;
     fd->table = table;
     fd->fd_number = table->last_fd++;
@@ -619,11 +719,12 @@ vfs::fd *vfs::make_fd(vfs::node *node, fd_table *table, int64_t flags, mode_t mo
 
             return nullptr;
         }
+
+        node->ref_count++;
     }
 
-    table->lock.irq_acquire();
+    util::lock_guard table_guard{table->lock};
     table->fd_list[fd->fd_number] = fd;
-    table->lock.irq_release();
 
     return fd;
 }
@@ -691,7 +792,6 @@ vfs::fd *vfs::dup(vfs::fd *fd, bool cloexec, ssize_t new_num) {
     }
 
     new_fd = frg::construct<vfs::fd>(memory::mm::heap);
-    new_fd->lock = util::lock();
     new_fd->desc = fd->desc;
     new_fd->table = fd->table;
     if (new_num >= 0) {
@@ -703,9 +803,12 @@ vfs::fd *vfs::dup(vfs::fd *fd, bool cloexec, ssize_t new_num) {
     new_fd->flags = cloexec ? fd->flags | O_CLOEXEC : fd->flags & ~O_CLOEXEC;
     new_fd->mode = fd->mode;
 
-    fd->table->lock.irq_acquire();
+    if (fd->desc->node) {
+        fd->desc->node->ref_count++;        
+    }
+
+    util::lock_guard table_guard{fd->table->lock};
     fd->table->fd_list[new_fd->fd_number] = new_fd;
-    fd->table->lock.irq_release();
 
     return new_fd;
 }
@@ -745,8 +848,15 @@ ssize_t vfs::close(vfs::fd *fd) {
             if (dirent == nullptr) continue;
             frg::destruct(memory::mm::heap, dirent);
         }
+        
+        if (desc->pipe) {
+            if (desc == desc->pipe->read) {
+                desc->pipe->read = nullptr;            
+            } else {
+                desc->pipe->write = nullptr;
+            }
+        }
 
-        frg::destruct(memory::mm::heap, desc->event_trigger);
         frg::destruct(memory::mm::heap, desc);
     }
 

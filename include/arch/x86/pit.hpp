@@ -4,7 +4,6 @@
 #include <cstddef>
 #include <frg/vector.hpp>
 #include <mm/mm.hpp>
-#include <sys/sched/wait.hpp>
 
 namespace pit {
     constexpr size_t PIT_FREQ = 100;

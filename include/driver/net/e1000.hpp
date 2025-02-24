@@ -1,12 +1,15 @@
 #ifndef E1000_HPP
 #define E1000_HPP
 
+#include "fs/dev.hpp"
+#include "mm/common.hpp"
+#include "util/types.hpp"
 #include <driver/net/device.hpp>
 #include <driver/net/types.hpp>
 #include <frg/functional.hpp>
 #include <frg/hash_map.hpp>
 #include <mm/mm.hpp>
-#include <sys/pci.hpp>
+#include <driver/bus/pci.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <arch/x86/types.hpp>
@@ -14,11 +17,6 @@
 namespace e1000 {
     constexpr size_t tx_max = 8;
     constexpr size_t rx_max = 32;
-
-    constexpr size_t intel_id = 0x8086;
-    constexpr size_t emu_id = 0x100E;
-    constexpr size_t i217_id = 0x153A;
-    constexpr size_t lm_id = 0x10EA;
 
     constexpr size_t reg_ctrl        = 0x0;
     constexpr size_t reg_status      = 0x8;
@@ -139,18 +137,24 @@ namespace e1000 {
         uint16_t special;
     };
 
-    void init();
-    void irq_handler(arch::irq_regs *r);
+    void irq_handler(arch::irq_regs *r, void *aux);
 
-    struct device: net::device {
+    struct device: vfs::devfs::device, net::device {
         private:
             pci::device *pci_dev;
 
-            uint8_t bar_type;
-            uint16_t io_base;
-            uint64_t mem_base;
+            vfs::devfs::bus_space *flash_space;
+            vfs::devfs::bus_space *reg_space;
+    
+            bus_handle_t flash_handle;
+            bus_handle_t reg_handle;
+
             bool is_e1000e;
             bool has_eeprom;
+
+            frg::vector<unique_ptr<vfs::devfs::bus_dma>, memory::mm::heap_allocator> rx_desc_dma;
+            unique_ptr<vfs::devfs::bus_dma> rx_dma;
+            unique_ptr<vfs::devfs::bus_dma> tx_dma;
 
             rx_desc *rx_descs[rx_max];
             tx_desc *tx_descs[tx_max];
@@ -171,23 +175,37 @@ namespace e1000 {
             void enable_irq();
 
             void rx_handle();
-
         public:
-            friend void e1000::init();
-            friend void irq_handler(arch::irq_regs *r);
+            friend void irq_handler(arch::irq_regs *r, void *aux);
 
-            bool init();
+            bool setup();
             
-            void send(const void *buf, size_t len) override;
-
             void init_routing() override;
             void add_route(const char *ipv4_dest, 
                 const char *ipv4_gateway, const char *ipv4_netmask,
                 uint16_t mtu = 576,
                 uint32_t dest_mask = 0xFFFFFFFF) override;
             uint32_t route(uint32_t dest) override;
-            
-            device(): net::device()  {}
+            void send(const void *buf, size_t len) override;
+
+            device(vfs::devfs::busdev *bus, ssize_t major, ssize_t minor, void *aux):
+                vfs::devfs::device(bus, major, minor, aux, vfs::devfs::device_class::OTHER), net::device(),
+                rx_desc_dma(),
+
+                rx_dma(bus->get_dma(sizeof(rx_desc) * rx_max)),
+                tx_dma(bus->get_dma(sizeof(tx_desc) * tx_max))
+            {
+                net::setup_args *args = (net::setup_args *) aux;
+
+                is_e1000e = args->flags;
+                has_eeprom = false;
+
+                flash_space = args->flash_space;
+                reg_space = args->reg_space;
+
+                reg_handle = reg_space->map(0, 128 * memory::page_size);
+                if (flash_space) flash_handle = flash_space->map(0, 512 * memory::page_size);
+            }
     };
 }
 

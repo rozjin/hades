@@ -1,3 +1,6 @@
+#include "mm/mm.hpp"
+#include "sys/sched/event.hpp"
+#include "util/types.hpp"
 #include <mm/vmm.hpp>
 #include <arch/types.hpp>
 #include <arch/x86/types.hpp>
@@ -85,7 +88,7 @@ void arch::init_sched() {
 
 void x86::init_bsp() {
     auto processor = frg::construct<x86::processor>(memory::mm::heap, 0);
-    processor->kstack = (size_t) memory::pmm::stack(x86::initialStackSize);
+    processor->kstack = (size_t) pmm::stack(x86::initialStackSize);
     processor->ctx = vmm::boot;
 
     x86::wrmsr(x86::MSR_GS_BASE, processor);
@@ -105,7 +108,7 @@ void x86::init_ap() {
 }
 
 void x86::init_idle() {
-    uint64_t idle_rsp = (uint64_t) memory::pmm::stack(1);
+    uint64_t idle_rsp = (uint64_t) pmm::stack(1);
 
     auto idle_task = sched::create_thread(_idle, idle_rsp, vmm::boot, 0);
     idle_task->state = sched::thread::BLOCKED;
@@ -295,7 +298,7 @@ int arch::do_futex(uintptr_t vaddr, int op, int expected, sched::timespec *timeo
 }
 
 frg::hash_map<uint64_t, sched::futex *, frg::hash<uint64_t>, memory::mm::heap_allocator> futex_list{frg::hash<uint64_t>()};
-int x86::do_futex(uintptr_t vaddr, int op, int expected, sched::timespec *timeout) {
+ssize_t x86::do_futex(uintptr_t vaddr, int op, int expected, sched::timespec *timeout) {
     auto process = x86::get_process();
 
     uint64_t vpage = vaddr & ~(0xFFF);
@@ -310,37 +313,26 @@ int x86::do_futex(uintptr_t vaddr, int op, int expected, sched::timespec *timeou
     switch (op) {
         case sched::FUTEX_WAIT: {
             if (*(uint32_t *) uaddr != expected) {
-                return -EAGAIN;
+                return EAGAIN;
             }
 
             sched::futex *futex;
             if (!futex_list.contains(paddr)) {
-                futex = frg::construct<sched::futex>(memory::mm::heap);
-
-                futex->lock = util::lock();
-                futex->waitq = ipc::queue();
-                futex->trigger = ipc::trigger();
-                futex->locked = 0;
-                futex->paddr = paddr;
-
-                futex->trigger.add(&futex->waitq);
+                futex = frg::construct<sched::futex>(memory::mm::heap, paddr);
                 futex_list[paddr] = futex;
             } else {
                 futex = futex_list[paddr];
             }
 
-            if (timeout) {
-                futex->waitq.set_timer(timeout);
-            }
-
+            futex->tids.push(get_tid());
             futex->locked = 1;
             for (;;) {
                 if (futex->locked == 0) {
                     break;
                 }
 
-                auto [waker, got_signal] = futex->waitq.block(x86::get_thread());
-                if (got_signal) {
+                auto [evt, thread] = ipc::receive({ FUTEX_WAKE }, true, timeout);
+                if (evt < 0) {
                     return -1;
                 }
             }
@@ -359,8 +351,11 @@ int x86::do_futex(uintptr_t vaddr, int op, int expected, sched::timespec *timeou
             futex_list.remove(futex->paddr);
 
             futex->locked = 0;
-            futex->trigger.arise(x86::get_thread());
+            for (auto tid: futex->tids) {
+                ipc::send({tid}, FUTEX_WAKE);
+            }
 
+            futex->tids.clear();
             break;
         }
     }

@@ -3,6 +3,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <frg/unique.hpp>
+#include <mm/mm.hpp>
 
 using pid_t = int;
 using tid_t = int;
@@ -125,5 +127,14 @@ struct pollfd {
     short events;
     short revents;
 };
+
+using bus_addr_t = size_t;
+using bus_size_t = size_t;
+using bus_handle_t = uintptr_t;
+
+template<typename T>
+using unique_ptr = frg::unique_ptr<T, memory::mm::heap_allocator>;
+
+constexpr char alpha_lower[] = "abcdefghijklmnopqrstuvwxyz";
 
 #endif

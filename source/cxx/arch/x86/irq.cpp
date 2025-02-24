@@ -68,12 +68,20 @@ void arch::route_irq(size_t irq, size_t vector) {
     x86::route_irq(irq, vector);
 }
 
+size_t arch::alloc_irq() {
+    return x86::alloc_irq();
+}
+
 size_t arch::install_irq(irq_fn handler) {
     return x86::install_irq(handler);
 }
 
+size_t arch::install_irq(irq_ext handler, void *aux) {
+    return x86::install_irq(handler, aux);
+}
+
 size_t last_handler = 1;
-x86::irq_fn handlers[224] = {};
+x86::irq_handler handlers[224] = {};
 
 x86::irq_ptr x86_ptr = {};
 x86::irq_entry x86_entries[256] = { { 0 } };
@@ -125,7 +133,7 @@ extern "C" {
             if (r->cs != 0x1B) {
                 x86::stop_all_cpus();
 
-                kmsg(logger, log::level::ERR, "%s exception on CPU %u, pid: %lu, tid: %lu \n"\
+                kmsg(logger, log::level::ERR, "%s exception on CPU %u, pid: %d, tid: %lu \n"\
                                             "RAX: %lx, RBX: %lx \n"\
                                             "RCX: %lx, RDX: %lx\n"\
                                             "RBP: %lx, RDI: %lx\n"\
@@ -156,7 +164,7 @@ extern "C" {
                 trace(r);
                 while (true) { asm volatile("hlt"); }
             } else {
-                kmsg(logger, log::level::ERR, "%s user exception on CPU %u, pid: %lu, tid: %lu \n"\
+                kmsg(logger, log::level::ERR, "%s user exception on CPU %u, pid: %d, tid: %lu \n"\
                                             "RAX: %lx, RBX: %lx \n"\
                                             "RCX: %lx, RDX: %lx\n"\
                                             "RBP: %lx, RDI: %lx\n"\
@@ -190,11 +198,6 @@ extern "C" {
 
                 auto task = x86::get_thread();
 
-                x86::get_locals()->task = nullptr;
-                x86::get_locals()->pid = -1;
-
-                task->state = sched::thread::DEAD;                    
-                sched::threads[task->tid] = (sched::thread *) 0;
                 task->proc->kill(255);
 
                 sched::swap_task(r);
@@ -202,8 +205,12 @@ extern "C" {
             }
         }
 
-        if (handlers[r->int_no - x86::IRQ0]) {
-            handlers[r->int_no - x86::IRQ0](r);
+        if (handlers[r->int_no - x86::IRQ0].fn.reg || handlers[r->int_no - x86::IRQ0].fn.ext) {
+            if (handlers[r->int_no - x86::IRQ0].aux) {
+                handlers[r->int_no - x86::IRQ0].fn.ext(r, handlers[r->int_no - x86::IRQ0].aux);
+            } else {
+                handlers[r->int_no - x86::IRQ0].fn.reg(r);
+            }
         }
 
         end_isr:
@@ -235,15 +242,34 @@ void x86::route_irq(size_t irq, size_t vector) {
     apic::ioapic::route(apic::lapic::id(), irq, vector + x86::IRQ0, 0);
 }
 
+size_t x86::alloc_irq() {
+    size_t idx = last_handler++;
+    return idx;
+}
+
+
 size_t x86::install_irq(irq_fn handler) {
     size_t idx = last_handler++;
-    handlers[idx] = handler;
+    handlers[idx].fn.reg = handler;
 
     return idx;
 }
 
+size_t x86::install_irq(irq_ext handler, void *aux) {
+    size_t idx = last_handler++;
+    handlers[idx].fn.ext = handler;
+    handlers[idx].aux = aux;
+    
+    return idx;
+}
+
 void x86::install_irq(size_t irq, irq_fn handler) {
-    handlers[irq] = handler;
+    handlers[irq].fn.reg = handler;
+}
+
+void x86::install_irq(size_t irq, irq_ext handler, void *aux) {
+    handlers[irq].fn.ext = handler;
+    handlers[irq].aux = aux;
 }
 
 void x86::irq_on() {

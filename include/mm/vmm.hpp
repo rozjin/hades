@@ -65,20 +65,15 @@ namespace vmm {
                     uint64_t len = 0;
                     vmm_ctx_map map = nullptr;
 
-                    union mapping_perms {
-                        struct {
-                            uint8_t read : 1;
-                            uint8_t write : 1;
-                            uint8_t user : 1;
-                            union {
-                                uint8_t shared: 1;
-                                uint8_t priv: 1;
-                            };
+                    struct mapping_perms {
+                        bool read;
+                        bool write;
+                        bool user;
 
-                            uint8_t exec : 1;
-                        };
+                        bool shared;
+                        bool priv;
 
-                        uint64_t number;
+                        bool exec;
                     };
 
                     mapping_perms perms;
@@ -107,14 +102,13 @@ namespace vmm {
             void delete_mappings(void *addr, uint64_t len, mapping *start, mapping *end);
             void *delete_mappings(void *addr, uint64_t len);
 
-            void copy_mappings(vmm::vmm_ctx *other);
             void unmap_pages(void *addr, size_t len, bool free_pages);
 
             vmm_ctx_map page_map;
 
             mapping::mapping_perms flags_to_perms(map_flags flags);
         public:
-            util::lock lock;
+            util::spinlock lock;
 
             vmm_ctx();
             ~vmm_ctx();

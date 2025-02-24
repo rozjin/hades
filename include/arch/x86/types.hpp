@@ -32,6 +32,7 @@ namespace vmm {
 
         SHARED = (1 << 11),
         PRIVATE = (1ULL << 52),
+        DIRTY = (1ULL << 53),
 
         EXEC = (1ULL << 63)
     };
@@ -139,11 +140,24 @@ namespace x86 {
     void stall_cpu();
 
     using irq_fn = void(*)(arch::irq_regs *r);
+    using irq_ext = void(*)(arch::irq_regs *r, void *aux);
+    struct irq_handler {
+        union {
+            irq_fn reg;
+            irq_ext ext;
+        } fn;
+        void *aux;
+    };
 
     void route_irq(size_t irq, size_t vector);
 
     void install_irq(size_t irq, irq_fn handler);
+    void install_irq(size_t irq, irq_ext handler, void *aux =  nullptr);
+
+    size_t alloc_irq();
+
     size_t install_irq(irq_fn handler);
+    size_t install_irq(irq_ext handler, void *aux);
 
     void set_gate(uint8_t num, uint64_t base, uint8_t flags);
     void set_ist(uint8_t num, uint8_t idx);
@@ -172,7 +186,7 @@ namespace x86 {
     void cleanup_vmm_ctx(sched::process *process);
     void stop_thread(sched::thread *task);
 
-    int do_futex(uintptr_t vaddr, int op, int expected, sched::timespec *timeout);
+    ssize_t do_futex(uintptr_t vaddr, int op, int expected, sched::timespec *timeout);
 
     void sigreturn_kill(sched::process *proc, ssize_t status);
     void sigreturn_default(sched::process *proc, sched::thread *task);

@@ -1,3 +1,5 @@
+#include "driver/dtable.hpp"
+#include "util/lock.hpp"
 #include <cstddef>
 #include <driver/video/vt.hpp>
 #include <driver/tty/tty.hpp>
@@ -8,7 +10,7 @@
 #include <mm/mm.hpp>
 
 void vt::driver::flush(tty::device *tty) {
-    tty->out_lock.irq_acquire();
+    util::lock_guard out_guard{tty->out_lock};
 
     char c;
     char buf[tty::output_size];
@@ -19,7 +21,6 @@ void vt::driver::flush(tty::device *tty) {
     }
 
     flanterm_write(ft_ctx, buf, count);
-    tty->out_lock.irq_release();
 }
 
 ssize_t vt::driver::ioctl(tty::device *tty, size_t req, void *buf) {
@@ -47,7 +48,7 @@ ssize_t vt::driver::ioctl(tty::device *tty, size_t req, void *buf) {
                     *fb_save->var = *fb->var;
                     *fb_save->fix = *fb->fix;
 
-                    fb_save->fix->smem_start = (uint64_t) memory::pmm::alloc(fb->fix->smem_len / memory::page_size);
+                    fb_save->fix->smem_start = (uint64_t) pmm::alloc(fb->fix->smem_len / memory::page_size);
                 }
 
                 flanterm_write(ft_ctx, "\e[?251", 6);
@@ -130,12 +131,7 @@ void vt::init(stivale::boot::tags::framebuffer info) {
     );
 
     for (size_t i = 0; i < vt_ttys; i++) {
-        auto tty = frg::construct<tty::device>(memory::mm::heap);
-        tty->driver = driver;
-        tty->major = tty::major;
-        tty->minor = i;
-
-        auto vt_path = vfs::path("tty") + (i + 48);
-        vfs::devfs::add(vt_path, tty);
+        auto tty = frg::construct<tty::device>(memory::mm::heap, vfs::devfs::mainbus, dtable::majors::VT, -1, driver);
+        vfs::devfs::append_device(tty, dtable::majors::VT);
     }
 }

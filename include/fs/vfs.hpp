@@ -10,7 +10,7 @@
 #include <frg/vector.hpp>
 #include <mm/mm.hpp>
 #include <sys/sched/time.hpp>
-#include <sys/sched/wait.hpp>
+#include <sys/sched/event.hpp>
 #include <util/lock.hpp>
 #include <util/log/log.hpp>
 #include <util/types.hpp>
@@ -18,6 +18,7 @@
 
 namespace sched {
     class process;
+    class thread;
 }
 
 namespace vfs {
@@ -192,7 +193,7 @@ namespace vfs {
             ssize_t flags;
             ssize_t type;
 
-            util::lock lock;
+            util::spinlock lock;
     };
 
     class filesystem {
@@ -252,6 +253,10 @@ namespace vfs {
                 return -ENOTSUP;
             }
 
+            virtual ssize_t poll(vfs::node *file, sched::thread *thread) {
+                return -ENOTSUP;
+            }
+
             virtual ssize_t create(node *dst, path name, int64_t type, int64_t flags, mode_t mode,
                 uid_t uid, gid_t gid) {
                 return -ENOTSUP;
@@ -292,9 +297,6 @@ namespace vfs {
 
         int current_ent;
         frg::vector<dirent *, memory::mm::heap_allocator> dirent_list;
-
-        ipc::trigger *event_trigger;
-        size_t status;
     };
 
     struct pipe {
@@ -302,6 +304,7 @@ namespace vfs {
         descriptor *write;
         void *buf;
         size_t len;
+        
         bool data_written;
     };
 
@@ -310,20 +313,22 @@ namespace vfs {
     using fd_pair = frg::tuple<vfs::fd *, vfs::fd *>;
 
     struct fd {
-        util::lock lock;
+        util::spinlock lock;
         descriptor *desc;
         fd_table *table;
         int fd_number;
         ssize_t flags;
         ssize_t mode;
+
+        fd(): lock() {};
     };
     
     struct fd_table {
-        util::lock lock;
+        util::spinlock lock;
         frg::hash_map<int, fd *, frg::hash<int>, memory::mm::heap_allocator> fd_list;
         size_t last_fd;
 
-        fd_table(): fd_list(frg::hash<int>()) {}
+        fd_table(): lock(), fd_list(frg::hash<int>()) {}
     };
 
     static size_t zero = 0;
@@ -346,6 +351,8 @@ namespace vfs {
     ssize_t write(vfs::fd *fd, void *buf, size_t len);
     ssize_t ioctl(vfs::fd *fd, size_t req, void *buf);
     void *mmap(vfs::fd *fd, void *addr, off_t off, size_t len);
+
+    ssize_t poll(pollfd *fds, nfds_t nfds, fd_table *table, sched::timespec *timespec);
 
     ssize_t stat(node *dir, frg::string_view filepath, node::statinfo *buf, int64_t flags);
 

@@ -4,7 +4,7 @@
 #include <arch/x86/types.hpp>
 #include <cstddef>
 #include <cstdint>
-#include <sys/sched/wait.hpp>
+#include <sys/sched/event.hpp>
 #include <sys/sched/time.hpp>
 #include <util/types.hpp>
 #include <arch/types.hpp>
@@ -120,12 +120,11 @@ namespace sched {
 
         struct signal {
             int signum;
-            ipc::trigger *notify_queue;
         };
 
         struct process_ctx {
             sigset_t sigpending;
-            util::lock lock;
+            util::spinlock lock;
         };
 
         struct thread_ctx {
@@ -135,8 +134,7 @@ namespace sched {
             sigset_t sigpending;
             sigset_t sigdelivered;
 
-            ipc::queue *waitq;
-            util::lock lock;
+            util::spinlock lock;
         };
 
         int do_sigaction(process *proc, thread *task, int sig, sigaction *act, sigaction *old);

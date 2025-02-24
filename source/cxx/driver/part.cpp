@@ -4,15 +4,11 @@
 #include <driver/part.hpp>
 #include <mm/mm.hpp>
 
-size_t part::probe(vfs::devfs::device *dev) {
-    if (!dev->is_blockdev) {
-        return -1;
-    }
+size_t part::probe(vfs::devfs::blockdev *dev) {
+    mbr::header *mbr_header = (mbr::header *) kmalloc(dev->block_size);
+    gpt::header *gpt_header = (gpt::header *) kmalloc(dev->block_size);
 
-    mbr::header *mbr_header = (mbr::header *) kmalloc(dev->blockdev.block_size);
-    gpt::header *gpt_header = (gpt::header *) kmalloc(dev->blockdev.block_size);
-
-    if (dev->read(gpt_header, dev->blockdev.block_size, dev->blockdev.block_size) < 1) {
+    if (dev->read(gpt_header, dev->block_size, dev->block_size) < 1) {
         kfree(mbr_header);
         kfree(gpt_header);
         return -1;
@@ -26,7 +22,7 @@ size_t part::probe(vfs::devfs::device *dev) {
         }
 
         gpt::part *gpt_part_list = (gpt::part *) kmalloc(gpt_header->part_len * sizeof(gpt::part));
-        if (dev->read(gpt_part_list, gpt_header->part_len * sizeof(gpt::part), gpt_header->part_start * dev->blockdev.block_size) < 1) {
+        if (dev->read(gpt_part_list, gpt_header->part_len * sizeof(gpt::part), gpt_header->part_start * dev->block_size) < 1) {
             kfree(mbr_header);
             kfree(gpt_header);
             kfree(gpt_part_list);
@@ -40,12 +36,12 @@ size_t part::probe(vfs::devfs::device *dev) {
                 continue;
             }
 
-            dev->blockdev.part_list.push({part.lba_end - part.lba_start, part.lba_start});
+            dev->part_list.push({part.lba_end - part.lba_start, part.lba_start});
             auto private_data = frg::construct<vfs::devfs::dev_priv>(memory::mm::heap);
             private_data->dev = dev;
-            private_data->part = dev->blockdev.part_list.size() - 1;
+            private_data->part = dev->part_list.size() - 1;
 
-            auto part_node = frg::construct<vfs::node>(memory::mm::heap, dev->file->fs, dev->file->name + (dev->blockdev.part_list.size() + 48), dev->file->parent, 0, vfs::node::type::BLOCKDEV);
+            auto part_node = frg::construct<vfs::node>(memory::mm::heap, dev->file->fs, dev->file->name + (dev->part_list.size() + 48), dev->file->parent, 0, vfs::node::type::BLOCKDEV);
             part_node->private_data = private_data;
 
             dev->file->parent->children.push_back(part_node);
@@ -57,7 +53,7 @@ size_t part::probe(vfs::devfs::device *dev) {
         return 0;
     }
 
-    if (dev->read(mbr_header, dev->blockdev.block_size, 0) < 1) {
+    if (dev->read(mbr_header, dev->block_size, 0) < 1) {
         kfree(mbr_header);
         kfree(gpt_header);
         return -1;
@@ -71,12 +67,12 @@ size_t part::probe(vfs::devfs::device *dev) {
                 continue;
             }
 
-            dev->blockdev.part_list.push({part.len, part.lba_start});
+            dev->part_list.push({part.len, part.lba_start});
             auto private_data = frg::construct<vfs::devfs::dev_priv>(memory::mm::heap);
             private_data->dev = dev;
-            private_data->part = dev->blockdev.part_list.size() - 1;
+            private_data->part = dev->part_list.size() - 1;
 
-            auto part_node = frg::construct<vfs::node>(memory::mm::heap, dev->file->fs, dev->file->name + (dev->blockdev.part_list.size() + 48), dev->file->parent, 0, vfs::node::type::BLOCKDEV);
+            auto part_node = frg::construct<vfs::node>(memory::mm::heap, dev->file->fs, dev->file->name + (dev->part_list.size() + 48), dev->file->parent, 0, vfs::node::type::BLOCKDEV);
             part_node->private_data = private_data;
             
             dev->file->parent->children.push_back(part_node);

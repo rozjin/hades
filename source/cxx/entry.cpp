@@ -4,10 +4,12 @@
 #include "driver/net/e1000.hpp"
 #include "driver/tty/tty.hpp"
 #include "driver/tty/pty.hpp"
+#include "driver/video/vt.hpp"
+#include "fs/cache.hpp"
 #include "lai/core.h"
 #include "lai/helpers/sci.h"
 #include "mm/common.hpp"
-#include "sys/sched/wait.hpp"
+#include "sys/sched/event.hpp"
 #include "sys/sched/signal.hpp"
 #include "util/types.hpp"
 #include <cstddef>
@@ -22,7 +24,7 @@
 #include <mm/vmm.hpp>
 #include <sys/acpi.hpp>
 #include <sys/x86/apic.hpp>
-#include <sys/pci.hpp>
+#include <driver/bus/pci.hpp>
 #include <sys/sched/sched.hpp>
 #include <util/stivale.hpp>
 #include <util/log/qemu.hpp>
@@ -32,23 +34,8 @@
 #include <util/log/log.hpp>
 #include <util/string.hpp>
 
-extern "C" {
-	extern void *_init_array_begin;
-	extern void *_init_array_end;
-}
-
 static stivale::boot::tags::framebuffer fbinfo{};
 static log::subsystem logger = log::make_subsystem("HADES");
-
-void initarray_run() {
-	uintptr_t start = (uintptr_t) &_init_array_begin;
-	uintptr_t end = (uintptr_t) &_init_array_end;
-
-	for (uintptr_t ptr = start; ptr < end; ptr += 8) {
-		auto fn = (void(*) ())(*(uintptr_t *) ptr);
-		fn();
-	}
-}
 
 static void run_init() {
     auto ctx = vmm::create();
@@ -101,11 +88,13 @@ static void kern_task() {
     lai_enable_acpi(1);
 
     vfs::init();
+    cache::init();
+    
     vfs::devfs::init();
-    ahci::init();
-    vfs::mount("/dev/sdb1", "/", vfs::fslist::EXT, 0);
+    vfs::devfs::probe();
+    // TODO: fix device init
 
-    e1000::init();
+    vfs::mount("/dev/sdb1", "/", vfs::fslist::EXT, 0);
 
     vt::init(fbinfo);
     tty::self::init();
@@ -125,32 +114,47 @@ static void kern_task() {
 }
 
 extern "C" {
+	extern void *__init_array_begin;
+	extern void *__init_array_end;
+}
+
+using constructor_t = void();
+static void run_constructors() {
+	uintptr_t start = (uintptr_t) &__init_array_begin;
+	uintptr_t end = (uintptr_t) &__init_array_end;
+
+	for (uintptr_t ptr = start; ptr < end; ptr += 8) {
+		auto fn = (constructor_t *)(*(uintptr_t *) ptr);
+		fn();
+	}
+}
+
+extern "C" {
     [[noreturn]]
     void arch_entry(stivale::boot::header *header) {
-        initarray_run();
+        run_constructors();
+
         stivale::parser = {header};
 
         fbinfo = *stivale::parser.fb();
         video::vesa::init(fbinfo);
 
-        kmsg(logger, "Booted by ", header->brand, " version ", header->version);
+        kmsg(logger, "Booted by %s, version %d", header->brand, header->version);
 
         acpi::init(stivale::parser.rsdp());
         arch::init_irqs();
 
-        memory::pmm::init(stivale::parser.mmap());
+        pmm::init(stivale::parser.mmap());
         vmm::init();
-        memory::mm::init();
 
         acpi::madt::init();
 
         sched::init();
-        arch::init_smp();
 
-        pci::init();
+        arch::init_smp();
         arch::start_bsp();
 
-        auto kern_thread = sched::create_thread(kern_task, (uint64_t) memory::pmm::stack(4), vmm::boot, 0);
+        auto kern_thread = sched::create_thread(kern_task, (uint64_t) pmm::stack(4), vmm::boot, 0);
         kern_thread->start();
         
         arch::irq_on();

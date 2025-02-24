@@ -1,10 +1,9 @@
+#include "util/misc.hpp"
 #include <arch/x86/smp.hpp>
 #include <arch/x86/types.hpp>
 #include <arch/x86/syscall.hpp>
 #include <cstdint>
 #include <util/log/log.hpp>
-
-#define LENGTHOF(x) (sizeof(x) / sizeof(x[0]))
 
 extern void syscall_openat(arch::irq_regs *);
 extern void syscall_accessat(arch::irq_regs *);
@@ -189,7 +188,7 @@ extern "C" {
     void syscall_handler(arch::irq_regs *r) {
         uint64_t syscall_num = r->rax;
 
-        if (syscall_num >= LENGTHOF(syscalls_list)) {
+        if (syscall_num >= util::lengthof(syscalls_list)) {
             r->rax = uint64_t(-1);
             x86::set_errno(ENOSYS);
             return;

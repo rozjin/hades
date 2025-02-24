@@ -89,7 +89,7 @@ uint64_t *x86::loader::place_args(uint64_t *location, sched::process_env *env) {
         strcpy((char *) location, env->params.argv[i]);
     }
 
-    location = (uint64_t *) ((uint64_t) location & -16ll);
+    location = (uint64_t *) ((uint64_t) location & -16LL);
 
     if ((env->params.argc + env->params.envc + 1) & 1) {
         location--;

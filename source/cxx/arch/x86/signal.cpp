@@ -1,4 +1,5 @@
 #include "mm/common.hpp"
+#include "util/lock.hpp"
 #include <arch/x86/smp.hpp>
 #include <arch/x86/types.hpp>
 #include <arch/types.hpp>
@@ -13,16 +14,6 @@ extern "C" {
 void x86::sigreturn_kill(sched::process *proc, ssize_t status) {
     irq_off();
 
-    auto task = get_thread();
-    x86::get_locals()->task = nullptr;
-    x86::get_locals()->pid = -1;
-
-    task->state = sched::thread::DEAD;
-    task->dispatch_ready = false;
-    task->pending_signal = false;
-
-    sched::threads[task->tid] = (sched::thread *) 0;
-
     proc->kill(status);
     while (true) {
         do_tick();
@@ -33,15 +24,11 @@ void x86::sigreturn_default(sched::process *proc, sched::thread *task) {
     irq_off();
 
     auto ctx = &task->sig_ctx;
-    ctx->lock.irq_acquire();
-
-    auto signal = &ctx->queue[task->ucontext.signum - 1];
+    util::lock_guard ctx_guard{ctx->lock};
 
     ctx->sigdelivered |= SIGMASK(task->ucontext.signum);
-    signal->notify_queue->arise(x86::get_thread());
-    frg::destruct(memory::mm::heap, signal->notify_queue);
 
-    ctx->lock.irq_release();
+    ctx_guard.~lock_guard();
 
     auto regs = &task->ucontext.ctx.reg;
     task->ctx.reg = *regs;
@@ -49,21 +36,24 @@ void x86::sigreturn_default(sched::process *proc, sched::thread *task) {
     x86::get_locals()->ustack = task->ustack;
     x86::get_locals()->kstack = task->kstack;
 
-    if (regs->cs & 0x3) {
-        x86::swapgs();
-    }
-
     auto iretq_regs = x86::sched_to_irq(regs);
 
     x86::set_fcw(regs->fcw);
     x86::set_mxcsr(regs->mxcsr);
     x86::load_sse(task->ucontext.ctx.sse_region);
     
+    x86::set_user_fs(regs->fs);
+    x86::set_user_gs(regs->gs);
+
     task->dispatch_ready = false;
     task->pending_signal = false;
     task->in_syscall = false;
     
-    memory::pmm::free((void *) (task->ucontext.stack - (4 * memory::page_size)));
+    pmm::free((void *) (task->ucontext.stack - (4 * memory::page_size)));
+
+    if (regs->cs & 0x3) {
+        x86::swapgs();
+    }
 
     x86_sigreturn_exit(&iretq_regs);
 }
@@ -148,7 +138,7 @@ void arch::init_user_sigreturn(sched::thread *task,
     auto stack = context->stack;
 
     stack -= 128;
-    stack &= -1611;
+    stack &= -16LL;
     stack -= sizeof(sched::signal::siginfo);
     sched::signal::siginfo *info = (sched::signal::siginfo *) stack;
 

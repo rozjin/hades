@@ -1,0 +1,15 @@
+[constants]
+toolchain = '/opt/elf-gcc/bin'
+
+[binaries]
+c = toolchain / 'x86_64-elf-gcc'
+cpp = toolchain / 'x86_64-elf-g++'
+ar = toolchain / 'x86_64-elf-ar'
+strip = toolchain / 'x86_64-elf-strip'
+ld = toolchain / 'x86_64-elf-ld'
+
+[host_machine]
+system = 'hades'
+cpu_family = 'x86_64'
+cpu = 'x86_64'
+endian = 'little'

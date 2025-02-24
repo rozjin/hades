@@ -17,7 +17,9 @@ namespace vmm {
         FILL_NOW = 256,
 
         NONE = 512,
-        DEMAND = 1024
+        DEMAND = 1024,
+
+        DIRTY = 2048
     };
 
     inline constexpr map_flags

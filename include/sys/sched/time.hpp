@@ -6,10 +6,6 @@
 #include <cstddef>
 #include <util/types.hpp>
 
-namespace ipc {
-    struct trigger;
-};
-
 namespace sched {    
     constexpr long NANOS_PER_MILLI = 1000000000;
 
@@ -64,7 +60,7 @@ namespace sched {
 
     struct timer {
         timespec spec;
-        ipc::trigger *trigger;
+        tid_t tid;
     };
 
     extern timespec clock_rt;

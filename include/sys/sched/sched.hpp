@@ -2,7 +2,7 @@
 #define SCHED_HPP
 
 #include <arch/x86/types.hpp>
-#include <sys/sched/wait.hpp>
+#include <sys/sched/event.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <frg/hash.hpp>
@@ -12,7 +12,6 @@
 #include <fs/vfs.hpp>
 #include <mm/mm.hpp>
 #include <mm/vmm.hpp>
-#include <sys/sched/wait.hpp>
 #include <sys/sched/signal.hpp>
 #include <util/lock.hpp>
 #include <util/elf.hpp>
@@ -78,12 +77,13 @@ namespace sched {
     void swap_task(arch::irq_regs *r);
 
     struct futex {
-        util::lock lock;
-        ipc::queue waitq;
-        ipc::trigger trigger;
+        util::spinlock lock;
         uint64_t paddr;
+        frg::vector<tid_t, memory::mm::heap_allocator> tids{};        
 
         int locked;
+
+        futex(uint64_t paddr): lock(), paddr(paddr), tids(), locked(0) {};
     };
 
     struct [[gnu::packed]] thread_info {
@@ -122,8 +122,6 @@ namespace sched {
                 BLOCKED,
                 DEAD,
             };
-
-            ipc::queue *waitq;
 
             bool pending_signal;
             bool dispatch_ready;
@@ -192,7 +190,7 @@ namespace sched {
             vfs::fd_table *fds;
             vfs::node *cwd;
 
-            util::lock lock{};
+            util::spinlock lock;
 
             uint64_t started;
             uint64_t stopped;
@@ -207,11 +205,8 @@ namespace sched {
             arch::entry_trampoline trampoline;
             signal::sigaction sigactions[SIGNAL_MAX];
             signal::process_ctx sig_ctx;
-            util::lock sig_lock;
-
-            ipc::queue *waitq;
-            ipc::trigger *notify_status;
-
+            util::spinlock sig_lock;
+            
             pid_t pid;
             pid_t ppid;
             pid_t pgid;
@@ -246,6 +241,8 @@ namespace sched {
             size_t find_zombie(process *proc);
 
             frg::tuple<int, pid_t> waitpid(pid_t pid, thread *waiter, int options);
+
+            process(): lock(), sig_lock() {};
     };
 
     class process_group {
@@ -322,10 +319,12 @@ namespace sched {
             }            
     };
 
+
+    inline frg::hash_map<pid_t, sched::process_group *, frg::hash<pid_t>, memory::mm::heap_allocator> process_groups{frg::hash<pid_t>()};
     inline frg::vector<sched::process *, memory::mm::heap_allocator> processes{};
     inline frg::vector<sched::thread *, memory::mm::heap_allocator> threads{};
 
-    extern util::lock sched_lock;
+    extern util::spinlock sched_lock;
 };
 
 #endif

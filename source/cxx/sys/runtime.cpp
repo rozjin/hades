@@ -5,7 +5,6 @@
 #include <sys/runtime.hpp>
 #include <util/log/log.hpp>
 #include <util/log/panic.hpp>
-#include <new>
 
 static log::subsystem logger = log::make_subsystem("FRG");
 extern "C" {
@@ -17,45 +16,12 @@ extern "C" {
         panic("[FRG | PANIC]: ", cstring);
     }
 
-    static constexpr size_t ATEXIT_MAX_FUNCS = 128;
-    atexit_func_entry __atexit_funcs[ATEXIT_MAX_FUNCS];
-
-    size_t __atexit_func_count = 0;
-    void *__dso_handle = 0;
-
-    int __cxa_atexit(void (*f)(void *), void *objptr, void *dso) {
-        if (__atexit_func_count >= ATEXIT_MAX_FUNCS) return -1;
-
-        __atexit_funcs[__atexit_func_count].destructor_func = f;
-        __atexit_funcs[__atexit_func_count].obj = objptr;
-        __atexit_funcs[__atexit_func_count].dso_handle = dso;
-        __atexit_func_count++;
-
-        return 0;
-    }
-
-    void __cxa_finalize(void *f) {
-        size_t i = __atexit_func_count;
-        if (!f) {
-            while (i--) {
-                if (__atexit_funcs[i].destructor_func) {
-                    (*__atexit_funcs[i].destructor_func)(__atexit_funcs[i].obj);
-                }
-            }
-
-            return;
-        }
-
-        while (i--) {
-            if (__atexit_funcs[i].destructor_func == f) {
-                (*__atexit_funcs[i].destructor_func)(__atexit_funcs[i].obj);
-                __atexit_funcs[i].destructor_func = 0;
-            }
-        }
-    }
-
     void __cxa_pure_virtual() {
         panic("pure virtual");
+    }
+
+    int __cxa_atexit(void (*f)(void *), void *objptr, void *dso) {
+        return 0;
     }
 
     namespace __cxxabiv1 {

@@ -1,5 +1,7 @@
 #include "arch/types.hpp"
+#include "sys/sched/event.hpp"
 #include "sys/sched/sched.hpp"
+#include "util/lock.hpp"
 #include <arch/x86/types.hpp>
 #include <cstddef>
 #include <driver/tty/tty.hpp>
@@ -61,55 +63,29 @@ bool new_line(tty::termios termios, char c) {
 	return true;
 }
 
-int tty::device::wait_for_kbd(util::ring<char> *queue, char *chars, bool check_min, int min) {
-    ipc::queue waitq;
-    kbd_trigger->add(&waitq);
-
-    for (;;) {
-        auto [waker, got_signal] = waitq.block(arch::get_thread());
-        if (got_signal) {
-            canon_lock.irq_release();
-            kfree(chars);
-
-            kbd_trigger->remove(&waitq);
-            return -1;
-        }
-
-        if (check_min) {
-            if (__atomic_load_n(&queue->items, __ATOMIC_RELAXED) >= min) break;
-        } else {
-            if (__atomic_load_n(&queue->items, __ATOMIC_RELAXED) > 0) break; 
-        }
-    }
-
-    kbd_trigger->remove(&waitq);
-    return 0;
-}
-
 ssize_t tty::device::read_canon(void *buf, size_t len) {
     char *chars = (char *) kmalloc(len);
+    char *chars_ptr = chars;
 
     size_t count = 0;
-    canon_lock.irq_acquire();
+    util::lock_guard canon_guard{canon_lock};
 
     acquire_chars:
         util::ring<char> *line_queue;
 
         if ((line_queue = canon.peek())) {
             for (count = 0; count < len; count++) {
-                if (!line_queue->pop(chars)) {
+                if (!line_queue->pop(chars_ptr)) {
                     break;
                 }
 
-                chars++;
+                chars_ptr++;
             }
 
             if (line_queue->items == 0) {
                 canon.pop(&line_queue);
                 frg::destruct(memory::mm::heap, line_queue);
             }
-
-            canon_lock.irq_release();
 
             auto copied = arch::copy_to_user(buf, chars, count);
             if (copied < count) {
@@ -127,11 +103,17 @@ ssize_t tty::device::read_canon(void *buf, size_t len) {
         canon.push(line_queue);
 
         while (true) {
-            if (wait_for_kbd(&in, chars) < 0) {
-                return -1;
+            for (;;) {
+                if (__atomic_load_n(&in.items, __ATOMIC_RELAXED) > 0) break; 
+
+                auto [evt, _] = ipc::receive({ KBD_PRESS }, true);
+                if (!evt) {
+                    kfree(chars);
+                    return -1;
+                }
             }
 
-            in_lock.irq_acquire();
+            util::lock_guard in_guard{in_lock};
             while (in.pop(&c)) {
                 if (ignore_char(termios, c)) {
                     continue;
@@ -141,16 +123,16 @@ ssize_t tty::device::read_canon(void *buf, size_t len) {
                 if (new_line(termios, c)) {
                     line_queue->push(c);
                     items++;
-                    out_lock.irq_acquire();
+                    out_lock.lock();
                     echo_char(this, c);
-                    out_lock.irq_release();
+                    out_lock.unlock();
 
                     if (driver && driver->has_flush)
                         driver->flush(this);
                 }
 
                 if (c == termios.c_cc[VEOL] || c == termios.c_cc[VEOF]) {
-                    in_lock.irq_release();
+                    in_guard.~lock_guard();
                     goto acquire_chars;
                 }
 
@@ -160,11 +142,11 @@ ssize_t tty::device::read_canon(void *buf, size_t len) {
                         items--;
                         char special2[] = { '\b', ' ', '\b' };
 
-                        out_lock.irq_acquire();
+                        out_lock.lock();
                         out.push(special2[0]);
                         out.push(special2[1]);
                         out.push(special2[2]);
-                        out_lock.irq_release();
+                        out_lock.unlock();
 
                         if (driver && driver->has_flush)
                             driver->flush(this);
@@ -173,7 +155,7 @@ ssize_t tty::device::read_canon(void *buf, size_t len) {
                 }
             }
 
-            in_lock.irq_release();
+            in_guard.~lock_guard();
         }
 
     goto acquire_chars;
@@ -184,6 +166,7 @@ ssize_t tty::device::read_raw(void *buf, size_t len) {
     cc_t time = termios.c_cc[VTIME];
 
     char *chars = (char *) kmalloc(len);
+    char *chars_ptr = chars;
     size_t count = 0;
 
     if (min == 0 && time == 0) {
@@ -192,25 +175,24 @@ ssize_t tty::device::read_raw(void *buf, size_t len) {
             return 0;
         }
 
-        in_lock.irq_acquire();
-        out_lock.irq_acquire();
+        util::lock_guard in_guard{in_lock};
+        util::lock_guard out_guard{out_lock};
         for (count = 0; count < len; count++) {
-            if (!in.pop(chars)) {
+            if (!in.pop(chars_ptr)) {
                 break;
             }
 
-            if (ignore_char(termios, *chars)) {
+            if (ignore_char(termios, *chars_ptr)) {
                 continue;
             }
 
-            *chars = correct_char(termios, *chars);
-            echo_char(this, *chars++);
+            *chars_ptr = correct_char(termios, *chars_ptr);
+            echo_char(this, *chars_ptr++);
         }
 
-        out_lock.irq_release();
+        out_guard.~lock_guard();
         if (driver && driver->has_flush)
             driver->flush(this);
-        in_lock.irq_release();
 
         auto copied = arch::copy_to_user(buf, chars, count);
         if (copied < count) {
@@ -221,26 +203,31 @@ ssize_t tty::device::read_raw(void *buf, size_t len) {
         kfree(chars);
         return count;
     } else if (min > 0 && time == 0) {
-        if (wait_for_kbd(&in, chars, true, min) < 0) {
-            return -1;
+        for (;;) {
+            if (__atomic_load_n(&in.items, __ATOMIC_RELAXED) >= min) break; 
+
+            auto [evt, _] = ipc::receive({ KBD_PRESS }, true);
+            if (!evt) {
+                kfree(chars);
+                return -1;
+            }
         }
 
-        in_lock.irq_acquire();
-        out_lock.irq_acquire();
+        util::lock_guard in_guard{in_lock};
+        util::lock_guard out_guard{out_lock};
         for (count = 0; count < len; count++) {
-            in.pop(chars);
-            if (ignore_char(termios, *chars)) {
+            in.pop(chars_ptr);
+            if (ignore_char(termios, *chars_ptr)) {
                 continue;
             }
 
-            *chars = correct_char(termios, *chars);
-            echo_char(this, *chars++);
+            *chars_ptr = correct_char(termios, *chars_ptr);
+            echo_char(this, *chars_ptr++);
         }
 
-        out_lock.irq_release();
+        out_guard.~lock_guard();
         if (driver && driver->has_flush)
             driver->flush(this);
-        in_lock.irq_release();
 
         auto copied = arch::copy_to_user(buf, chars, count);
         if (copied < count) {

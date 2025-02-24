@@ -69,6 +69,7 @@ void net::ipv4::ipv4_handle(net::device *dev, void *pkt, size_t len) {
     switch(ipv4_pkt->proto) {
         case 0x01: {
             icmp_handle(dev, src_ip, body, body_size);
+            break;
         }
 
         case 0x06: {
@@ -176,7 +177,7 @@ void net::ipv4::icmp_handle(net::device *dev, uint32_t src_ip, void *pkt, size_t
     switch (icmp_pkt->type) {
         // echo reply
         case 0: {
-
+            break;
         };
 
         // unreachable

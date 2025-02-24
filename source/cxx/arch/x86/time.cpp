@@ -1,4 +1,5 @@
 #include "mm/mm.hpp"
+#include "sys/sched/event.hpp"
 #include <arch/x86/smp.hpp>
 #include <cstddef>
 #include <sys/sched/sched.hpp>
@@ -33,9 +34,8 @@ void arch::tick_clock(long nanos) {
 
         timer->spec = timer->spec - interval;
         if (timer->spec.tv_nsec == 0 && timer->spec.tv_sec == 0) {
-            timer->trigger->arise(x86::get_thread());
+            ipc::send({timer->tid}, TIME_WAKE);
 
-            frg::destruct(memory::mm::heap, timer->trigger);
             frg::destruct(memory::mm::heap, timer);
             sched::timers[i] = nullptr;
         }

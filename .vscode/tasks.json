@@ -13,7 +13,7 @@
             "label": "Build Hades",
             "type": "shell",
             "linux": {
-                "command": "meson setup .. && ninja",
+                "command": "meson setup --cross-file ../cross_file.txt .. && ninja",
                 "options": {
                     "cwd": "${workspaceRoot}/build"
                 }

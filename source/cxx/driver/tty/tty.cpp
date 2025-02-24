@@ -1,4 +1,7 @@
+#include "driver/dtable.hpp"
 #include "driver/video/vesa.hpp"
+#include "util/lock.hpp"
+#include "util/types.hpp"
 #include <arch/types.hpp>
 #include <cstddef>
 #include <sys/sched/signal.hpp>
@@ -10,9 +13,13 @@
 #include <mm/mm.hpp>
 
 tty::device *tty::active_tty = nullptr;
+
+size_t self_major = 5;
+size_t self_minor = 0;
+
 void tty::self::init() {
-    auto self = frg::construct<tty::self>(memory::mm::heap);
-    vfs::devfs::add("tty", self);
+    auto self = frg::construct<tty::self>(memory::mm::heap, vfs::devfs::mainbus, dtable::majors::SELF_TTY, -1, nullptr);
+    vfs::devfs::append_device(self, dtable::majors::SELF_TTY);
 }
 
 ssize_t tty::self::on_open(vfs::fd *fd, ssize_t flags) {
@@ -113,26 +120,26 @@ ssize_t tty::device::write(void *buf, size_t count, size_t offset) {
     }
 
     // TODO: nonblock support in vfs
-    out_lock.irq_acquire();
+    out_lock.lock();
 
     char *chars = (char *) kmalloc(count);
     auto copied = arch::copy_from_user(chars, buf, count);
     if (copied < count) {
         kfree(chars);
-        out_lock.irq_release();
+        out_lock.unlock();
         return count - copied;
     }
 
     size_t bytes = 0;
     for (bytes = 0; bytes < count; bytes++) {
         if (!out.push(*chars++)) {
-            out_lock.irq_release();
+            out_lock.unlock();
             driver->flush(this);
-            out_lock.irq_acquire();
+            out_lock.lock();
         }
     }
 
-    out_lock.irq_release();
+    out_lock.unlock();
     driver->flush(this);
 
     kfree(chars);
@@ -140,25 +147,23 @@ ssize_t tty::device::write(void *buf, size_t count, size_t offset) {
 }
 
 ssize_t tty::device::ioctl(size_t req, void *buf) {
-    lock.irq_acquire();
+    util::lock_guard guard{lock};
+
     switch (req) {
         case TIOCGPGRP: {
             if (arch::get_process()->sess != sess) {
                 arch::set_errno(ENOTTY);
-                lock.irq_release();
                 return -1;
             }
 
             pid_t *pgrp = (pid_t *) buf;
             *pgrp = fg->pgid;
-            lock.irq_release();
             return 0;
         }
 
         case TIOCSPGRP: {
             if (arch::get_process()->sess != sess) {
                 arch::set_errno(ENOTTY);
-                lock.irq_release();
                 return -1;
             }
 
@@ -167,19 +172,16 @@ ssize_t tty::device::ioctl(size_t req, void *buf) {
 
             if (!(group = sess->groups[pgrp])) {
                 arch::set_errno(EPERM);
-                lock.irq_release();
                 return -1;
             }
 
             fg = group;
-            lock.irq_release();
             return 0;
         }
 
         case TIOCSCTTY: {
             if (sess || (arch::get_process()->sess->leader_pgid != arch::get_process()->group->pgid)) {
                 arch::set_errno(EPERM);
-                lock.irq_release();
                 return -1;
             }
 
@@ -187,83 +189,75 @@ ssize_t tty::device::ioctl(size_t req, void *buf) {
             fg = arch::get_process()->group;
 
             arch::get_process()->sess->tty = this;            
-            lock.irq_release();
             return 0;
         }
 
         case TCGETS: {
-            in_lock.irq_acquire();
-            out_lock.irq_acquire();
+            util::lock_guard in_guard{in_lock};
+            util::lock_guard out_guard{out_lock};
 
             tty::termios *attrs = (tty::termios *) buf;
             *attrs = termios;
-
-            out_lock.irq_release();
-            in_lock.irq_release();
-
-            lock.irq_release();
             return 0;
         }
 
         case TCSETS: {
-            in_lock.irq_acquire();
-            out_lock.irq_acquire();
+            util::lock_guard in_guard{in_lock};
+            util::lock_guard out_guard{out_lock};
 
             tty::termios *attrs = (tty::termios *) buf;
             termios = *attrs;
-
-            out_lock.irq_release();
-            in_lock.irq_release();
             return 0;
         }
 
         case TCSETSW: {
             while (__atomic_load_n(&out.items, __ATOMIC_RELAXED));
 
-            in_lock.irq_acquire();
-            out_lock.irq_acquire();
+            util::lock_guard in_guard{in_lock};
+            util::lock_guard out_guard{out_lock};
 
             tty::termios *attrs = (tty::termios *) buf;
             termios = *attrs;
-
-            out_lock.irq_release();
-            in_lock.irq_release();
-
-            lock.irq_release();
             return 0;            
         }
 
         case TCSETSF: {
             while (__atomic_load_n(&out.items, __ATOMIC_RELAXED));
 
-            in_lock.irq_acquire();
-            out_lock.irq_acquire();
+            util::lock_guard in_guard{in_lock};
+            util::lock_guard out_guard{out_lock};
 
             tty::termios *attrs = (tty::termios *) buf;
             termios = *attrs;
 
             char c;
             while (in.pop(&c));
-
-            out_lock.irq_release();
-            in_lock.irq_release();
-
-            lock.irq_release();
             return 0;            
         }
 
         default: {
             if (driver && driver->has_ioctl) {
                 auto res = driver->ioctl(this, req, buf);
-                lock.irq_release();
                 return res;
             } else {
                 arch::set_errno(ENOTTY);
-                lock.irq_release();
                 return -1;
             }
         }
     }
+}
+
+ssize_t tty::device::poll(sched::thread *thread) {
+    for (;;) {
+        if (__atomic_load_n(&in.items, __ATOMIC_RELAXED) >= 0) break; 
+
+        auto [evt, _] = ipc::receive({ KBD_PRESS }, true);
+        if (!evt) {
+            return -1;
+        }
+    }
+
+    return POLLIN | POLLOUT;
 }
 
 void tty::set_active(frg::string_view path, vfs::fd_table *table) {

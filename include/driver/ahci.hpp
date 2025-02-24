@@ -1,13 +1,14 @@
 #ifndef AHCI_HPP
 #define AHCI_HPP
 
+#include "mm/common.hpp"
+#include "util/types.hpp"
 #include <mm/mm.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <frg/vector.hpp>
 #include <fs/dev.hpp>
-#include <sys/pci.hpp>
-#include <sys/sched/wait.hpp>
+#include <sys/sched/event.hpp>
 #include <util/lock.hpp>
 
 namespace ahci {
@@ -69,7 +70,7 @@ namespace ahci {
             uint8_t lba1;
             uint8_t lba2;
             uint8_t dev;
-            
+
             uint8_t lba3;
             uint8_t lba4;
             uint8_t lba5;
@@ -172,7 +173,7 @@ namespace ahci {
 
             uint32_t dma_buf_offset;
             uint32_t transfer_count;
-            
+
             uint32_t reserved3;
         };
 
@@ -207,7 +208,7 @@ namespace ahci {
 
         uint32_t tfd;
         uint32_t sig;
-        
+
         uint32_t sata_status;
         uint32_t sata_ctl;
         uint32_t sata_err;
@@ -280,10 +281,13 @@ namespace ahci {
     struct command_slot {
         int idx;
         command_entry *entry;
+        unique_ptr<vfs::devfs::bus_dma> dma;
     };
 
-    constexpr size_t major = 0xA;
-    constexpr char alphabet[] = "abcdefghijklmnopqrstuvwxyz";
+    struct setup_args {
+        vfs::devfs::bus_space *bar;
+        vfs::devfs::bus_space *port;
+    };
 
     constexpr size_t get_fis_size(size_t n_fis) {
         return sizeof(command_entry) + sizeof(prdt_entry) * n_fis;
@@ -293,35 +297,62 @@ namespace ahci {
         return (((count + 1) & ~1) - 1) & 0x3FFFFF;
     }
 
-    struct device;
-    void init();
-    ssize_t find_cmdslot(ahci::device *device);
-
-    struct device : vfs::devfs::device {
+    struct device : vfs::devfs::blockdev {
         private:
-            util::lock lock;
+            util::spinlock lock;
 
             size_t sectors;
             size_t sector_size;
-            bool exists;
-            volatile abar *bar;
-            int64_t id;
             bool lba48;
-            volatile ahci::port *port;
 
+            vfs::devfs::bus_space *bar_space;
+            vfs::devfs::bus_space *port_space;
+
+            bus_handle_t bar_handle;
+            bus_handle_t port_handle;
+
+            ahci::abar *bar;
+            ahci::port *port;
+
+            unique_ptr<vfs::devfs::bus_dma> data_dma;
+
+            void await_ready();
+
+            void stop_command();
+            void start_command();
+            void reset_engine();
+            void comreset();
+
+            int wait_command(size_t slot);
+            void issue_command(size_t slot);
             ssize_t find_cmdslot();
+
+            ahci::command_slot get_command(uint64_t fis_size);
+            ahci::command_header *get_header(uint8_t slot);
+
+            void fill_prdt(void *mem, ahci::prdt_entry *prdt);
             command_slot issue_read_write(void *buf, uint16_t count, size_t offset, bool rw);
+
             ssize_t do_sector_io(void *buf, uint16_t count, size_t offset, bool rw);
         public:
-            friend void ahci::init();
-            friend ssize_t find_cmdslot(ahci::device *device);
-            
-            device() {};
+            device(vfs::devfs::busdev *bus, ssize_t major, ssize_t minor, void *aux): vfs::devfs::blockdev(bus, major, minor, aux),
+                data_dma(bus->get_dma(memory::page_size)) {
+                setup_args *args = (setup_args *) aux;
+
+                bar_space = args->bar;
+                port_space = args->port;
+
+                bar_handle = bar_space->map(0, sizeof(::ahci::port));
+                port_handle = port_space->map(0, sizeof(::ahci::port));
+
+                bar = (ahci::abar *) bar_space->vaddr(bar_handle);
+                port = (ahci::port *) port_space->vaddr(port_handle);
+            };
 
             void setup();
             void identify_sata();
             ssize_t read(void *buf, size_t count, size_t offset) override;
-            ssize_t write(void *buf, size_t count, size_t offset) override; 
+            ssize_t write(void *buf, size_t count, size_t offset) override;
     };
 };
 

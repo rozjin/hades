@@ -43,6 +43,11 @@ namespace vt {
         ssize_t ioctl(tty::device *tty, size_t req, void *buf) override;
         void flush(tty::device *tty) override;
     };
+
+    struct matcher: vfs::devfs::matcher {
+        matcher(): vfs::devfs::matcher(true,
+        "tty", nullptr, false, 0) {}
+    };
 }
 
 #endif

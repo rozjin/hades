@@ -1,20 +1,14 @@
 #ifndef TTY_HPP
 #define TTY_HPP
 
-#include "driver/keyboard.hpp"
 #include "driver/tty/termios.hpp"
 #include "fs/vfs.hpp"
-#include "mm/mm.hpp"
-#include "sys/sched/wait.hpp"
+#include "sys/sched/event.hpp"
 #include "util/lock.hpp"
 #include "util/ring.hpp"
 #include <cstddef>
 #include <fs/dev.hpp>
 #include <sys/sched/sched.hpp>
-
-namespace vt {
-    void init(stivale::boot::tags::framebuffer info);
-}
 
 namespace tty {
     #define TCGETS 0x5401
@@ -35,8 +29,6 @@ namespace tty {
     constexpr size_t max_chars = 8192;
     constexpr size_t max_canon_lines = 256;
     constexpr size_t output_size = 8192;
-
-    constexpr size_t major = 29;
 
     struct winsize {
         uint16_t ws_row;
@@ -59,9 +51,8 @@ namespace tty {
     };
 
     void echo_char(device *tty, char c);
-    struct device: vfs::devfs::device {
-        private:
-            util::lock lock;
+    struct device: vfs::devfs::chardev {
+            util::spinlock lock;
             int ref;
 
             tty::driver *driver;
@@ -70,28 +61,23 @@ namespace tty {
             sched::process_group *fg;
             tty::termios termios;
 
-            ipc::trigger *kbd_trigger;
-        public:
-            friend struct ptmx;
-            friend struct pts;
-            friend void echo_char(device *tty, char c);
-            friend void vt::init(stivale::boot::tags::framebuffer info);
-            friend void sched::process::kill(int exit_code);
-            friend void kb::irq_handler(arch::irq_regs *r);
-
             // TODO: change visibility
 
-            util::lock in_lock;
+            util::spinlock in_lock;
             util::ring<char> in;
 
-            util::lock out_lock;
+            util::spinlock out_lock;
             util::ring<char> out;
 
-            util::lock canon_lock;
+            util::spinlock canon_lock;
             util::ring<util::ring<char> *> canon;
 
-            device(): termios(), in_lock(), in(max_chars), out_lock(),
-                   out(output_size), canon_lock(), canon(max_canon_lines) {
+            device(vfs::devfs::busdev *bus, ssize_t major, ssize_t minor, void *aux): 
+                    vfs::devfs::chardev(bus, major, minor, aux),
+                    termios(), in_lock(), in(max_chars), out_lock(),
+                    out(output_size), canon_lock(), canon(max_canon_lines) {
+                driver = (tty::driver *) aux;
+
                 termios.c_lflag = ECHO | ECHOCTL | ECHOE | ISIG | ICANON | TOSTOP;
                 termios.c_iflag = 0;
 
@@ -107,13 +93,10 @@ namespace tty {
 
                 termios.c_cc[VTIME] = 0;
                 termios.c_cc[VMIN] = 1;
-
-                kbd_trigger = frg::construct<ipc::trigger>(memory::mm::heap);
             };
 
             void handle_signal(char c);
 
-            int wait_for_kbd(util::ring<char> *queue, char *chars, bool check_min = false, int min = 0);
             ssize_t read_canon(void* buf, size_t len);
             ssize_t read_raw(void *buf, size_t len);
 
@@ -124,12 +107,15 @@ namespace tty {
             ssize_t read(void *buf, size_t count, size_t offset) override;
             ssize_t write(void *buf, size_t count, size_t offset) override;
             ssize_t ioctl(size_t req, void *buf) override;
+            ssize_t poll(sched::thread *thread) override;
     };
 
-    struct self: vfs::devfs::device {
-        public:
-            static void init();
-            ssize_t on_open(vfs::fd *fd, ssize_t flags) override;        
+    struct self: vfs::devfs::chardev {
+        static void init();
+        ssize_t on_open(vfs::fd *fd, ssize_t flags) override;    
+        
+        self(vfs::devfs::busdev *bus, ssize_t major, ssize_t minor, void *aux):
+            chardev(bus, major, minor, aux) {}
     };
 
     void set_active(frg::string_view path, vfs::fd_table *table);

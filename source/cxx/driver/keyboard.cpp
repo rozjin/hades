@@ -2,8 +2,9 @@
 #include "arch/types.hpp"
 #include "arch/x86/types.hpp"
 #include "driver/tty/tty.hpp"
-#include "sys/x86/apic.hpp"
+#include "sys/sched/event.hpp"
 #include "util/io.hpp"
+#include "util/lock.hpp"
 #include <cstddef>
 #include <cstdint>
 
@@ -183,7 +184,8 @@ void kb::irq_handler(arch::irq_regs *r) {
         return;
     }
 
-    tty::active_tty->in_lock.irq_acquire();
+    util::lock_guard in_guard{tty::active_tty->in_lock};
+
     while (true) {
         uint8_t status = io::readb(kb::KBD_PS2_STATUS);
         if ((status & (1 << 0)) == 0) {
@@ -194,27 +196,28 @@ void kb::irq_handler(arch::irq_regs *r) {
             continue;
         }
 
+        char *seq;
         char c = '\0';
         int fun = get_character(&c);
         tty::active_tty->handle_signal(c);
-        tty::active_tty->kbd_trigger->arise(arch::get_thread());
 
         if (c != '\0') {
             tty::active_tty->in.push(c);
-            continue;
+            goto notify_kbd;
         }
 
         if (fun == -1) {
             continue;
         }
 
-        char *seq = control_sequence[fun];
+        seq = control_sequence[fun];
         for (size_t i = 0; i < strlen(seq); i++) {
             tty::active_tty->in.push(seq[i]);
         }
-    }
 
-    tty::active_tty->in_lock.irq_release();
+        notify_kbd:
+            ipc::send(KBD_PRESS);
+    }
 }
 
 void kb::init() {

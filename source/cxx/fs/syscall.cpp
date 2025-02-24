@@ -18,7 +18,9 @@
     pathlist lsdir(frg::string_view dirpath);
  */
 
+#include "sys/sched/event.hpp"
 #include "sys/sched/time.hpp"
+#include "util/lock.hpp"
 #include <util/types.hpp>
 #include <frg/string.hpp>
 #include <mm/mm.hpp>
@@ -163,7 +165,7 @@ void syscall_openat(arch::irq_regs *r) {
             return;
         }
 
-
+        node = vfs::resolve_at(path, base);
     } else if ((flags & O_CREAT) && (flags & O_EXCL)) {
         arch::set_errno(EEXIST);
         r->rax = -1;
@@ -274,14 +276,13 @@ void syscall_pipe(arch::irq_regs *r) {
     int *fd_nums = (int *) r->rdi;
 
     auto process = arch::get_process();
-    process->fds->lock.irq_acquire();
+    util::lock_guard fd_guard{process->fds->lock};
 
     auto [fd_read, fd_write] = vfs::open_pipe(process->fds, 0);
 
     fd_nums[0] = fd_read->fd_number;
     fd_nums[1] = fd_write->fd_number;
 
-    process->fds->lock.irq_release();
     r->rax = 0;
 }
 
@@ -291,19 +292,16 @@ void syscall_lseek(arch::irq_regs *r) {
 
     auto process = arch::get_process();
 
-    process->fds->lock.irq_acquire();
+    util::lock_guard fd_guard{process->fds->lock};
     auto fd = process->fds->fd_list[r->rdi];
     if (fd == nullptr || (fd->desc->node && fd->desc->node->type == vfs::node::type::DIRECTORY)) {
         arch::set_errno(ESPIPE);
-        process->fds->lock.irq_release();
         r->rax = -1;
         return;
     }
 
-    fd->lock.irq_acquire();
+    util::lock_guard guard{fd->lock};
     r->rax = vfs::lseek(fd, offset, whence);
-    fd->lock.irq_release();
-    process->fds->lock.irq_release();
 }
 
 void syscall_dup2(arch::irq_regs *r) {
@@ -319,9 +317,8 @@ void syscall_dup2(arch::irq_regs *r) {
         return;
     }
 
-    oldfd->lock.irq_acquire();
+    util::lock_guard guard{oldfd->lock};
     auto newfd = vfs::dup(oldfd, false, newfd_num);
-    oldfd->lock.irq_release();
 
     r->rax = newfd->fd_number;
 }
@@ -330,17 +327,15 @@ void syscall_close(arch::irq_regs *r) {
     int fd_number = r->rdi;
     auto process = arch::get_process();
 
-    process->fds->lock.irq_acquire();
+    util::lock_guard fd_guard{process->fds->lock};
     auto fd = process->fds->fd_list[fd_number];
     if (fd == nullptr) {
         arch::set_errno(EBADF);
-        process->fds->lock.irq_release();
         r->rax = -1;
         return;
     }
 
     vfs::close(fd);
-    process->fds->lock.irq_release();
     r->rax = 0;
 }
 
@@ -351,11 +346,10 @@ void syscall_read(arch::irq_regs *r) {
 
     auto process = arch::get_process();
 
-    process->fds->lock.irq_acquire();
+    util::lock_guard fd_guard{process->fds->lock};
     auto fd = process->fds->fd_list[fd_number];
     if (fd == nullptr || (fd->desc->node && fd->desc->node->type == vfs::node::type::DIRECTORY)) {
         arch::set_errno(ESPIPE);
-        process->fds->lock.irq_release();
         r->rax = -1;
         return;
     }
@@ -363,23 +357,20 @@ void syscall_read(arch::irq_regs *r) {
     if ((fd->flags & O_ACCMODE) != O_RDONLY
             && (fd->flags & O_ACCMODE) != O_RDWR) {
         arch::set_errno(EBADF);
-        process->fds->lock.irq_release();
         r->rax = -1;
         return;
     }
 
-    fd->lock.irq_acquire();
+    util::lock_guard guard{fd->lock};
     if (fd->desc->node) {
-        fd->desc->node->lock.irq_acquire();
+        fd->desc->node->lock.lock();
     }
 
     r->rax = vfs::read(fd, buf, count);
 
     if (fd->desc->node) {
-        fd->desc->node->lock.irq_release();
+        fd->desc->node->lock.unlock();
     }
-    fd->lock.irq_release();
-    process->fds->lock.irq_release();
 }
 
 void syscall_write(arch::irq_regs *r) {
@@ -389,11 +380,10 @@ void syscall_write(arch::irq_regs *r) {
 
     auto process = arch::get_process();
 
-    process->fds->lock.irq_acquire();
+    util::lock_guard fd_guard{process->fds->lock};
     auto fd = process->fds->fd_list[fd_number];
     if (fd == nullptr || (fd->desc->node && fd->desc->node->type == vfs::node::type::DIRECTORY)) {
         arch::set_errno(ESPIPE);
-        process->fds->lock.irq_release();
         r->rax = -1;
         return;
     }
@@ -401,27 +391,20 @@ void syscall_write(arch::irq_regs *r) {
     if ((fd->flags & O_ACCMODE) != O_WRONLY
             && (fd->flags & O_ACCMODE) != O_RDWR) {
         arch::set_errno(EBADF);
-        process->fds->lock.irq_release();
         r->rax = -1;
         return;
     }
 
-    fd->lock.irq_acquire();
+    util::lock_guard guard{fd->lock};
     if (fd->desc->node) {
-        fd->desc->node->lock.irq_acquire();
+        fd->desc->node->lock.lock();
     }
 
     r->rax = vfs::write(fd, buf, count);
-    if (fd->desc->node) {
-        fd->desc->status |= POLLIN;
-        fd->desc->event_trigger->arise(arch::get_thread());
-    }
 
     if (fd->desc->node) {
-        fd->desc->node->lock.irq_release();
+        fd->desc->node->lock.unlock();
     }
-    fd->lock.irq_release();
-    process->fds->lock.irq_release();
 }
 
 void syscall_ioctl(arch::irq_regs *r) {
@@ -431,18 +414,17 @@ void syscall_ioctl(arch::irq_regs *r) {
 
     auto process = arch::get_process();
 
-    process->fds->lock.irq_acquire();
+    util::lock_guard fd_guard{process->fds->lock};
     auto fd = process->fds->fd_list[fd_number];
     if (fd == nullptr || (fd->desc->node && fd->desc->node->type == vfs::node::type::DIRECTORY)) {
         arch::set_errno(ESPIPE);
-        process->fds->lock.irq_release();
         r->rax = -1;
         return;
     }
 
-    fd->lock.irq_acquire();
+    util::lock_guard guard{fd->lock};
     if (fd->desc->node) {
-        fd->desc->node->lock.irq_acquire();
+        fd->desc->node->lock.lock();
     }
 
     auto res = vfs::ioctl(fd, req, arg);
@@ -454,10 +436,8 @@ void syscall_ioctl(arch::irq_regs *r) {
     }
 
     if (fd->desc->node) {
-        fd->desc->node->lock.irq_release();
+        fd->desc->node->lock.unlock();
     }
-    fd->lock.irq_release();
-    process->fds->lock.irq_release();
 }
 
 void syscall_statat(arch::irq_regs *r) {
@@ -552,9 +532,8 @@ void syscall_mkdirat(arch::irq_regs *r) {
         new_gid = process->effective_gid;
     }
 
-    dir->lock.irq_acquire();
+    util::lock_guard guard{dir->lock};
     auto res = vfs::mkdir(dir, path, 0, new_mode, new_uid, new_gid);
-    dir->lock.irq_release();
 
     if (res < 0) {
         arch::set_errno(-res);
@@ -613,12 +592,12 @@ void syscall_renameat(arch::irq_regs *r) {
 
     auto dst = resolve_at(new_path, new_base);
 
-    old_dir->lock.irq_acquire();
-    new_dir->lock.irq_acquire();
+    util::lock_guard old_guard{old_dir->lock};
+    util::lock_guard new_guard{new_dir->lock};
 
-    src->lock.irq_acquire();
+    util::lock_guard src_guard{src->lock};
     if (dst) {
-        dst->lock.irq_acquire();
+        dst->lock.lock();
 
         if (!has_recursive_access(dst, process->effective_uid, process->effective_gid,
             0, 0, W_OK, true)) {
@@ -630,12 +609,9 @@ void syscall_renameat(arch::irq_regs *r) {
 
     auto res = vfs::rename(old_base, old_path, new_base, new_path, 0);
 
-    old_dir->lock.irq_release();
-    new_dir->lock.irq_release();
     if (dst) {
-        dst->lock.irq_release();
+        dst->lock.unlock();
     }
-    src->lock.irq_release();
 
     if (res < 0) {
         arch::set_errno(-res);
@@ -717,17 +693,12 @@ void syscall_linkat(arch::irq_regs *r) {
         return;
     }
 
-    old_dir->lock.irq_acquire();
-    new_dir->lock.irq_acquire();
+    util::lock_guard old_guard{old_dir->lock};
+    util::lock_guard new_guard{new_dir->lock};
 
-    src->lock.irq_acquire();
+    util::lock_guard src_guard{src->lock};
 
     auto res = vfs::link(old_base, old_path, new_base, new_path, false);
-
-    old_dir->lock.irq_release();
-    new_dir->lock.irq_release();
-
-    src->lock.irq_release();
 
     if (res < 0) {
         arch::set_errno(-res);
@@ -775,13 +746,10 @@ void syscall_unlinkat(arch::irq_regs *r) {
 
     auto dir = node->parent;
 
-    dir->lock.irq_acquire();
-    node->lock.irq_acquire();
+    util::lock_guard dir_guard{dir->lock};
+    util::lock_guard guard{node->lock};
 
     auto res = vfs::unlink(base, path);
-
-    node->lock.irq_release();
-    dir->lock.irq_release();
 
     if (res < 0) {
         arch::set_errno(-res);
@@ -798,18 +766,18 @@ void syscall_readdir(arch::irq_regs *r) {
 
     auto process = arch::get_process();
 
-    process->fds->lock.irq_acquire();
+    util::lock_guard fd_guard{process->fds->lock};
     auto fd = process->fds->fd_list[fd_number];
     if (fd == nullptr || fd->desc->node == nullptr || fd->desc->node->type != vfs::node::type::DIRECTORY) {
         arch::set_errno(EBADF);
-        process->fds->lock.irq_release();
         r->rax = 1;
         return;
     }
 
-    fd->lock.irq_acquire();
     auto node = fd->desc->node;
-    node->lock.irq_acquire();
+
+    util::lock_guard guard{fd->lock};
+    util::lock_guard node_guard{node->lock};
 
     if ((node->children.size() >= fd->desc->current_ent) && node->children.size() != fd->desc->dirent_list.size()) {
         for (auto dirent: fd->desc->dirent_list) {
@@ -825,10 +793,6 @@ void syscall_readdir(arch::irq_regs *r) {
         for (size_t i = 0; i < node->children.size(); i++) {
             auto child = node->children[i];
             if (child ==  nullptr) {
-                node->lock.irq_release();
-                fd->lock.irq_release();
-                process->fds->lock.irq_release();
-
                 r->rax = -1;
                 return;
             }
@@ -841,20 +805,12 @@ void syscall_readdir(arch::irq_regs *r) {
 
     if (fd->desc->current_ent >= fd->desc->dirent_list.size()) {
         arch::set_errno(0);
-        node->lock.irq_release();
-        fd->lock.irq_release();
-        process->fds->lock.irq_release();
-
         r->rax = -1;
         return;
     }
 
     *ents = *fd->desc->dirent_list[fd->desc->current_ent];
     fd->desc->current_ent++;
-
-    node->lock.irq_release();
-    fd->lock.irq_release();
-    process->fds->lock.irq_release();
 
     r->rax = 0;
 }
@@ -883,17 +839,15 @@ void syscall_fcntl(arch::irq_regs *r) {
         }
 
         case F_GETFD: {
-            fd->lock.irq_acquire();
+            util::lock_guard guard{fd->lock};
             r->rax = fd->flags;
-            fd->lock.irq_release();
             break;
         }
 
         case F_SETFD: {
-            fd->lock.irq_acquire();
+            util::lock_guard guard{fd->lock};
             fd->flags = r->rdx;
             r->rax = 0;
-            fd->lock.irq_release();
             break;
         }
 
@@ -904,9 +858,8 @@ void syscall_fcntl(arch::irq_regs *r) {
                 return;
             }
 
-            fd->desc->node->lock.irq_acquire();
+            util::lock_guard guard{fd->desc->node->lock};
             r->rax = fd->desc->node->flags;
-            fd->desc->node->lock.irq_release();
             break;
         }
 
@@ -923,12 +876,10 @@ void syscall_fcntl(arch::irq_regs *r) {
                 return;
             }
 
-            fd->desc->node->lock.irq_acquire();
+            util::lock_guard guard{fd->desc->node->lock};
 
             fd->desc->node->flags = r->rdx;
             r->rax = 0;
-
-            fd->desc->node->lock.irq_release();
             break;
         }
 
@@ -950,65 +901,25 @@ void syscall_poll(arch::irq_regs *r) {
         return;
     }
 
-    sched::timespec timespec = sched::timespec::ms(timeout);
-    ipc::queue waitq{};
-    waitq.set_timer(&timespec);
+    auto timespec = sched::timespec::ms(timeout);
 
-    process->fds->lock.irq_acquire();
-
-    frg::vector<vfs::descriptor *, memory::mm::heap_allocator> desc_list{};
-    for (size_t i = 0; i < nfds; i++) {
-        auto pollfd = &fds[i];
-        auto fd = process->fds->fd_list[pollfd->fd];
-
-        if (fd == nullptr) {
-            process->fds->lock.irq_release();
-            arch::set_errno(EBADF);
-            r->rax = -1;
-            return;
-        }
-
-        auto desc = fd->desc;
-
-        desc_list.push(desc);
-        desc->event_trigger->add(&waitq);
-    }
-
-    int res = 0;
-    for (;;) {
-        for (size_t i = 0; i < desc_list.size(); i++) {
-            auto desc = desc_list[i];
-            if (desc->status & fds[i].events) {
-                fds[i].revents = desc->status & fds[i].events;
-                res++;
-            }
-        }
-
-        if (res) {
-            break;
-        }
-
-        auto [waker, got_signal] = waitq.block(arch::get_thread());
-        if (got_signal) {
-            res = -1;
-            break;
-        }
-    }
-
-    for (size_t i = 0; i < desc_list.size(); i++) {
-        auto desc = desc_list[i];
-        desc->event_trigger->remove(&waitq);
-        desc_list[i] = nullptr;
-    }
-
-    r->rax = res;
+    util::lock_guard guard{process->fds->lock};
+    r->rax = vfs::poll(fds, nfds, process->fds, &timespec);
 }
 
 void syscall_ppoll(arch::irq_regs *r) {
+    pollfd *fds = (pollfd *) r->rdi;
+    nfds_t nfds = r->rsi;
+    sched::timespec *timespec = (sched::timespec *) r->rdx;
     sigset_t *sigmask = (sigset_t *) r->r10;
-    
+
+    auto process = arch::get_process();
+
     sigset_t original_mask;
     sched::signal::do_sigprocmask(arch::get_thread(), SIG_SETMASK, sigmask, &original_mask);
-    syscall_poll(r);
+
+    util::lock_guard guard{process->fds->lock};
+    r->rax = vfs::poll(fds, nfds, process->fds, timespec);
+
     sched::signal::do_sigprocmask(arch::get_thread(), SIG_SETMASK, &original_mask, nullptr);
 }

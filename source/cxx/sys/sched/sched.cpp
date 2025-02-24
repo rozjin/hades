@@ -1,3 +1,4 @@
+#include "arch/x86/smp.hpp"
 #include "arch/x86/types.hpp"
 #include <arch/types.hpp>
 #include <cstddef>
@@ -10,7 +11,7 @@
 #include <mm/pmm.hpp>
 #include <mm/vmm.hpp>
 #include <sys/sched/sched.hpp>
-#include <sys/sched/wait.hpp>
+#include <sys/sched/event.hpp>
 #include <sys/sched/signal.hpp>
 #include <util/io.hpp>
 #include <util/log/log.hpp>
@@ -18,7 +19,7 @@
 #include <util/lock.hpp>
 #include <util/elf.hpp>
 
-util::lock sched::sched_lock{};
+util::spinlock sched::sched_lock{};
 
 void sched::init() {
     arch::init_features();
@@ -28,17 +29,14 @@ void sched::init() {
 sched::thread *sched::create_thread(void (*main)(), uint64_t rsp, vmm::vmm_ctx *ctx, uint8_t privilege) {
     thread *task = frg::construct<thread>(memory::mm::heap);
 
-    task->kstack = (size_t) memory::pmm::stack(4);
+    task->kstack = (size_t) pmm::stack(x86::initialStackSize);
     task->ustack = rsp;
 
     task->sig_ctx = signal::thread_ctx{};
-    task->sig_ctx.waitq = frg::construct<ipc::queue>(memory::mm::heap);
 
-    task->sig_kstack = (size_t) memory::pmm::stack(4);
-    task->sig_ustack = (size_t) memory::pmm::stack(4);
+    task->sig_kstack = (size_t) pmm::stack(x86::initialStackSize);
     task->mem_ctx = ctx;
 
-    task->waitq  = frg::construct<ipc::queue>(memory::mm::heap);
     task->dispatch_ready = false;
     task->pending_signal = false;
     task->in_syscall = false;
@@ -71,8 +69,6 @@ sched::process *sched::create_process(char *name, void (*main)(), uint64_t rsp, 
     proc->group = nullptr;
     proc->sess = nullptr;
 
-    proc->lock = util::lock();
-    proc->sig_lock = util::lock();
     proc->trampoline = 0;
     // default sigactions
     for (size_t i = 0; i < SIGNAL_MAX; i++) {
@@ -81,9 +77,6 @@ sched::process *sched::create_process(char *name, void (*main)(), uint64_t rsp, 
     }
 
     proc->sig_ctx = signal::process_ctx{};
-
-    proc->waitq = frg::construct<ipc::queue>(memory::mm::heap);;
-    proc->notify_status = frg::construct<ipc::trigger>(memory::mm::heap);;
 
     proc->real_uid = 0;
     proc->effective_uid = 0;
@@ -102,7 +95,10 @@ sched::process *sched::create_process(char *name, void (*main)(), uint64_t rsp, 
 }
 
 sched::process_group *sched::create_process_group(process *leader) {
-    return frg::construct<sched::process_group>(memory::mm::heap, leader);
+    auto group = frg::construct<sched::process_group>(memory::mm::heap, leader);
+    process_groups[group->pgid] = group;
+
+    return group;
 }
 
 sched::session *sched::create_session(process *leader, process_group *group) {
@@ -112,21 +108,16 @@ sched::session *sched::create_session(process *leader, process_group *group) {
 sched::thread *sched::fork(thread *original, vmm::vmm_ctx *ctx, arch::irq_regs *r) {
     thread *task = frg::construct<thread>(memory::mm::heap);
 
-    task->kstack = (size_t) memory::pmm::stack(4);
-    task->sig_kstack = (size_t) memory::pmm::stack(4);
-
-    task->sig_ustack = original->sig_ustack;
-    task->ustack = original->ustack;
+    task->kstack = (size_t) pmm::stack(x86::initialStackSize);
+    task->sig_kstack = (size_t) pmm::stack(x86::initialStackSize);
 
     task->sig_ctx = signal::thread_ctx{};
-    task->sig_ctx.waitq = frg::construct<ipc::queue>(memory::mm::heap);
     task->sig_ctx.sigmask = original->sig_ctx.sigmask;
 
     task->mem_ctx = ctx;
 
     arch::fork_context(original, task, r);
 
-    task->waitq = frg::construct<ipc::queue>(memory::mm::heap);
     task->dispatch_ready = original->dispatch_ready;
     task->pending_signal = original->pending_signal;
     task->in_syscall = original->in_syscall;
@@ -138,7 +129,7 @@ sched::thread *sched::fork(thread *original, vmm::vmm_ctx *ctx, arch::irq_regs *
 }
 
 sched::process *sched::fork(process *original, thread *caller, arch::irq_regs *r) {
-    sched_lock.irq_acquire();
+    util::lock_guard guard{sched_lock};
 
     process *proc = frg::construct<process>(memory::mm::heap);
 
@@ -149,7 +140,7 @@ sched::process *sched::fork(process *original, thread *caller, arch::irq_regs *r
     proc->cwd = original->cwd;
 
     proc->parent = original;
-    proc->ppid = original->ppid;
+    proc->ppid = original->pid;
     proc->trampoline = original->trampoline;
     memcpy(&proc->sigactions, &original->sigactions, SIGNAL_MAX * sizeof(signal::sigaction));
 
@@ -170,8 +161,6 @@ sched::process *sched::fork(process *original, thread *caller, arch::irq_regs *r
         proc->sess = original->sess;
     }
 
-    proc->lock = util::lock();
-    proc->sig_lock = util::lock();
     proc->status = WCONTINUED_CONSTRUCT;
 
     proc->real_uid = original->real_uid;
@@ -186,14 +175,7 @@ sched::process *sched::fork(process *original, thread *caller, arch::irq_regs *r
 
     proc->sig_ctx = signal::process_ctx{};
 
-    proc->waitq = frg::construct<ipc::queue>(memory::mm::heap);
-    proc->notify_status = frg::construct<ipc::trigger>(memory::mm::heap);
-    proc->notify_status->add(original->waitq);
-
     original->children.push_back(proc);
-
-    sched_lock.irq_release();
-
     return proc;
 }
 
@@ -225,7 +207,7 @@ sched::process *sched::find_process(pid_t pid) {
 }
 
 int64_t sched::process::start() {
-    sched_lock.irq_acquire();
+    util::lock_guard guard{sched_lock};
 
     processes.push_back(this);
     pid_t new_pid = processes.size() - 1;
@@ -233,10 +215,9 @@ int64_t sched::process::start() {
     main_thread->pid = new_pid;
     this->status = WCONTINUED_CONSTRUCT;
 
-    sched_lock.irq_release();
+    guard.~lock_guard();
 
     main_thread->start();
-
     return pid;
 }
 
@@ -261,16 +242,12 @@ void sched::process::kill(int exit_code) {
     arch::cleanup_vmm_ctx(this);
     signal::send_process(nullptr, this->parent, SIGCHLD);
 
-    sched_lock.irq_acquire();
+    util::lock_guard guard{sched_lock};
     for (size_t i = 0; i < children.size(); i++) {
         auto child = children[i];
         if (child == nullptr) continue;
-
-        child->notify_status->clear();
-        child->notify_status->add(parent->waitq);
-
         child->parent = parent;
-        child->ppid = parent->ppid;
+        child->ppid = parent->pid;
         parent->children.push(child);
 
         children[i] = nullptr;
@@ -279,12 +256,8 @@ void sched::process::kill(int exit_code) {
     for (size_t i = 0; i < zombies.size(); i++) {
         auto zombie = zombies[i];
         if (zombie == nullptr) continue;
-
-        zombie->notify_status->clear();
-        zombie->notify_status->add(parent->waitq);
-
         zombie->parent = parent;
-        zombie->ppid = parent->ppid;
+        zombie->ppid = parent->pid;
         parent->zombies.push(zombie);
 
         zombies[i] = nullptr;
@@ -295,8 +268,9 @@ void sched::process::kill(int exit_code) {
 
     if (group->leader_pid == this->pid) {
         group->remove_process(this);
-        if (group->process_count > 0) {
+        if (group->process_count == 0) {
             group->sess->remove_group(group);
+            process_groups[group->pgid] = 0;
             frg::destruct(memory::mm::heap, group);
         } else {
             bool is_orphan = true;
@@ -344,9 +318,17 @@ void sched::process::kill(int exit_code) {
     }
 
     status = WEXITED_CONSTRUCT(exit_code) | STATUS_CHANGED;
-    notify_status->arise(main_thread);
+    ipc::send(ppid, PROCESS_STATUS_CHANGE);
 
-    sched_lock.irq_release();
+    x86::get_locals()->task = nullptr;
+    x86::get_locals()->pid = -1;
+
+    main_thread->state = sched::thread::DEAD;
+    main_thread->dispatch_ready = false;
+    main_thread->pending_signal = false;
+    main_thread->in_syscall = true;
+
+    sched::threads[main_thread->tid] = (sched::thread *) 0;
 }
 
 void sched::process::suspend() {
@@ -359,7 +341,7 @@ void sched::process::suspend() {
 
     status = WSTOPPED_CONSTRUCT | STATUS_CHANGED;
     signal::send_process(nullptr, parent, SIGCHLD);
-    notify_status->arise(main_thread);
+    ipc::send(ppid, PROCESS_STATUS_CHANGE);
 }
 
 void sched::process::cont() {
@@ -372,11 +354,11 @@ void sched::process::cont() {
 
     status = WCONTINUED_CONSTRUCT | STATUS_CHANGED;
     signal::send_process(nullptr, parent, SIGCHLD);
-    notify_status->arise(main_thread);
+    ipc::send(ppid, PROCESS_STATUS_CHANGE);
 }
 
 int64_t sched::thread::start() {
-    sched_lock.irq_acquire();
+    util::lock_guard guard{sched_lock};
 
     threads.push_back(this);
     tid_t tid = threads.size() - 1;
@@ -386,59 +368,54 @@ int64_t sched::thread::start() {
         this->proc->status = WCONTINUED_CONSTRUCT | STATUS_CHANGED;
     }
 
-    sched_lock.irq_release();
-
     return tid;
 }
 
 void sched::thread::stop() {
-    sched_lock.irq_acquire();
+    sched_lock.lock();
 
     this->state = thread::BLOCKED;
     if (this->cpu != -1) {
-        sched_lock.irq_release();
+        sched_lock.unlock();
 
         arch::stop_thread(this);
 
-        sched_lock.irq_acquire();
+        sched_lock.lock();
     }
 
-    sched_lock.irq_release();
+    sched_lock.unlock();
 }
 
 void sched::thread::cont() {
-    sched_lock.irq_acquire();
+    util::lock_guard guard{sched_lock};
     this->state = thread::READY;
-    sched_lock.irq_release();
 }
 
 int64_t sched::thread::kill() {
-    sched_lock.irq_acquire();
+    sched_lock.lock();
 
     this->state = thread::DEAD;
     if (this->cpu != -1) {
-        sched_lock.irq_release();
+        sched_lock.unlock();
 
         arch::stop_thread(this);
 
-        sched_lock.irq_acquire();
+        sched_lock.lock();
     }
 
     threads[tid] = (sched::thread *) 0;
-    sched_lock.irq_release();
+    sched_lock.unlock();
 
     return this->tid;
 }
 
 
 void sched::process::add_thread(thread *task) {
-    sched_lock.irq_acquire();
+    util::lock_guard guard{sched_lock};
 
     task->proc = this;
     task->pid = this->pid;
     this->threads.push(task);
-
-    sched_lock.irq_release();
 }
 
 size_t sched::process::find_child(sched::process *proc) {
@@ -462,23 +439,18 @@ size_t sched::process::find_zombie(sched::process *proc) {
 }
 
 void reap_process(sched::process *zombie) {
-    sched::sched_lock.irq_acquire();
+    util::lock_guard guard{sched::sched_lock};
 
     auto task = zombie->main_thread;
     sched::processes[zombie->pid] = nullptr;
 
-    frg::destruct(memory::mm::heap, task->sig_ctx.waitq);
     frg::destruct(memory::mm::heap, task);
-    frg::destruct(memory::mm::heap, zombie->waitq);
-    frg::destruct(memory::mm::heap, zombie->notify_status);
     frg::destruct(memory::mm::heap, zombie);
-
-    sched::sched_lock.irq_release();
 }
 
 frg::tuple<int, pid_t> sched::process::waitpid(pid_t pid, thread *waiter, int options) {
     // Reap zombies first
-    this->lock.irq_acquire();
+    util::lock_guard guard{this->lock};
     for (size_t i = 0; i < zombies.size(); i++) {
         process *zombie = zombies[i];
         if (zombie == nullptr) continue;
@@ -502,12 +474,10 @@ frg::tuple<int, pid_t> sched::process::waitpid(pid_t pid, thread *waiter, int op
         pid_t pid = zombie->pid;
         reap_process(zombie);
 
-        this->lock.irq_release();
         return {status, pid};
     }
 
     if (options & WNOHANG) {
-        this->lock.irq_release();
         return {0, 0};
     }
 
@@ -517,8 +487,8 @@ frg::tuple<int, pid_t> sched::process::waitpid(pid_t pid, thread *waiter, int op
 
     do_wait:
         while (true) {
-            auto [thread, got_signal] = waitq->block(waiter);
-            if (got_signal) {
+            auto [evt, thread] = ipc::receive({ PROCESS_STATUS_CHANGE }, true);
+            if (evt < 0) {
                 goto finish;
             }
 
@@ -549,7 +519,6 @@ frg::tuple<int, pid_t> sched::process::waitpid(pid_t pid, thread *waiter, int op
             reap_process(proc);
         }
     finish:
-        this->lock.irq_release();
         return {exit_status, return_pid};
 }
 
@@ -581,7 +550,7 @@ int64_t sched::pick_task() {
 }
 
 void sched::swap_task(arch::irq_regs *r) {
-    sched_lock.acquire();
+    sched_lock.lock_noirq();
 
     auto running_task = arch::get_thread();
     if (running_task) {
@@ -622,5 +591,5 @@ void sched::swap_task(arch::irq_regs *r) {
         }
     }
 
-    sched_lock.release();
+    sched_lock.unlock_noirq();
 }
