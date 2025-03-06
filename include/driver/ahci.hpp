@@ -281,7 +281,7 @@ namespace ahci {
     struct command_slot {
         int idx;
         command_entry *entry;
-        unique_ptr<vfs::devfs::bus_dma> dma;
+        shared_ptr<vfs::devfs::bus_dma> dma;
     };
 
     struct setup_args {
@@ -314,7 +314,7 @@ namespace ahci {
             ahci::abar *bar;
             ahci::port *port;
 
-            unique_ptr<vfs::devfs::bus_dma> data_dma;
+            shared_ptr<vfs::devfs::bus_dma> data_dma;
 
             void await_ready();
 
@@ -342,7 +342,7 @@ namespace ahci {
                 bar_space = args->bar;
                 port_space = args->port;
 
-                bar_handle = bar_space->map(0, sizeof(::ahci::port));
+                bar_handle = bar_space->map(0, sizeof(::ahci::abar));
                 port_handle = port_space->map(0, sizeof(::ahci::port));
 
                 bar = (ahci::abar *) bar_space->vaddr(bar_handle);
@@ -353,6 +353,11 @@ namespace ahci {
             void identify_sata();
             ssize_t read(void *buf, size_t count, size_t offset) override;
             ssize_t write(void *buf, size_t count, size_t offset) override;
+    };
+
+    struct matcher: vfs::devfs::matcher {
+        matcher(): vfs::devfs::matcher(true, false,
+            "sd", nullptr, true, 0) {}
     };
 };
 

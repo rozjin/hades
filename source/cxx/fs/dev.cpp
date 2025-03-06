@@ -17,7 +17,7 @@ vfs::devfs::rootbus *vfs::devfs::mainbus = nullptr;
 
 void vfs::devfs::rootbus::attach(ssize_t major, void *aux) {
     switch(major) {
-        case PCI_MAJOR: {
+        case dtable::majors::PCI: {
             pcibus *pci_bus = frg::construct<pcibus>(memory::mm::heap, this, 0);
 
             bus_devices.push_back(pci_bus);
@@ -41,7 +41,7 @@ void vfs::devfs::rootbus::attach(ssize_t major, void *aux) {
 }
 
 void vfs::devfs::rootbus::enumerate() {
-    attach(PCI_MAJOR, nullptr);
+    attach(dtable::majors::PCI, nullptr);
 }
 
 void vfs::devfs::init() {
@@ -59,54 +59,73 @@ void vfs::devfs::probe() {
 
 void vfs::devfs::append_device(device *dev, ssize_t major) {
     size_t idx = 0;
+    devfs::matcher *matcher = dtable::lookup_by_major(major);
+    if (!matcher) return;
 
     if (device_map.contains(major)) {
+        if (matcher->single && device_map[major].list.size() >= 1) return;
+
         device_map[major].list.push(dev);
         idx = device_map[major].last_index++;
         dev->minor = idx;
     } else {
-        device_list list{};
-        device_map[major] = list;
+        device_map[major] = device_list{};
+        device_map[major].list.push(dev);
 
-        list.list.push(dev);
-
-        idx = list.last_index++;
+        idx = device_map[major].last_index++;
         dev->minor = idx;
     }
 
-    devfs::matcher *matcher = dtable::lookup_by_major(major);
-    if (!matcher->has_file) return;
+    switch(dev->cls) {
+        case device_class::CHARDEV:
+        case device_class::BLOCKDEV:
+        case device_class::OTHER: {
+            if (!matcher->has_file) break;
+        
+            vfs::path device_path{};
+            if (matcher->subdir) {
+                device_path += matcher->subdir;
+                device_path += "/";
+            }
+        
+            if (matcher->base_name) device_path += matcher->base_name;
 
-    vfs::path device_path{};
-    if (matcher->subdir) {
-        device_path += matcher->subdir;
-        device_path += "/";
-    }
+            if (!matcher->single) {
+                if (matcher->alpha_names) {
+                    device_path += alpha_lower[matcher->start_index + idx];   
+                } else {
+                    device_path += matcher->start_index + idx + 48;
+                }    
+            }
+        
+            node *device_node = vfs::make_recursive(vfs::device_fs()->root, device_path, dev->cls == device_class::BLOCKDEV ? node::type::BLOCKDEV : node::type::CHARDEV, DEFAULT_MODE);
+            if (!device_node) {
+                panic("[DEVFS]: Unable to make device: %s", device_path.data());
+            }
+        
+            auto private_data = frg::construct<dev_priv>(memory::mm::heap);
+            private_data->dev = dev;
+            private_data->part = -1;
+        
+            device_node->private_data = private_data;
+        
+            devfs::filedev *filedev = (devfs::filedev *) private_data->dev;
+            filedev->file = device_node;
+        
+            if (dev->cls == device_class::BLOCKDEV) {
+                auto block_device = (blockdev *) dev;
+                block_device->disk_cache = cache::create_cache(block_device);
 
-    if (matcher->base_name) device_path += matcher->base_name;
-    if (matcher->alpha_names) {
-        device_path += alpha_lower[matcher->start_index + idx];   
-    } else {
-        device_path += matcher->start_index + idx + 48;
-    }
+                part::probe(block_device);
+            }
 
-    node *device_node = vfs::make_recursive(vfs::device_fs()->root, device_path, dev->cls == device_class::BLOCKDEV ? node::type::BLOCKDEV : node::type::CHARDEV, DEFAULT_MODE);
-    if (!device_node) {
-        panic("[DEVFS]: Unable to make device: %s", device_path.data());
-    }
+            break;
+        }
 
-    auto private_data = frg::construct<dev_priv>(memory::mm::heap);
-    private_data->dev = dev;
-    private_data->part = -1;
-
-    device_node->private_data = private_data;
-
-    devfs::filedev *filedev = (devfs::filedev *) private_data->dev;
-    filedev->file = device_node;
-
-    if (dev->cls == device_class::BLOCKDEV) {
-        auto block_device = (blockdev *) dev;
-        block_device->disk_cache = cache::create_cache(block_device);
+        case device_class::BUS: {
+            ((busdev *) dev)->enumerate();
+            break;
+        }
     }
 }
 

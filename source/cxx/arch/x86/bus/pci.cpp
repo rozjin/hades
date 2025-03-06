@@ -10,7 +10,7 @@ namespace pci {
         uint32_t lfunc = (uint32_t) func;
      
         uint32_t address = (uint32_t) ((lbus << 16) | (lslot << 11) |
-                  (lfunc << 8) | (reg & 0xFC) | ((uint32_t) 0x80000000));
+                  (lfunc << 8) | (reg & 0xFC) | (1ULL << 31));
         return address;
     }
     

@@ -45,7 +45,7 @@ namespace vt {
     };
 
     struct matcher: vfs::devfs::matcher {
-        matcher(): vfs::devfs::matcher(true,
+        matcher(): vfs::devfs::matcher(true, false,
         "tty", nullptr, false, 0) {}
     };
 }

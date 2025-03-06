@@ -152,9 +152,9 @@ namespace e1000 {
             bool is_e1000e;
             bool has_eeprom;
 
-            frg::vector<unique_ptr<vfs::devfs::bus_dma>, memory::mm::heap_allocator> rx_desc_dma;
-            unique_ptr<vfs::devfs::bus_dma> rx_dma;
-            unique_ptr<vfs::devfs::bus_dma> tx_dma;
+            frg::vector<shared_ptr<vfs::devfs::bus_dma>, memory::mm::heap_allocator> rx_desc_dma;
+            shared_ptr<vfs::devfs::bus_dma> rx_dma;
+            shared_ptr<vfs::devfs::bus_dma> tx_dma;
 
             rx_desc *rx_descs[rx_max];
             tx_desc *tx_descs[tx_max];

@@ -66,11 +66,11 @@ void get_ownership(volatile ahci::abar *bar) {
 }
 
 vfs::devfs::device 
-    *pci::ahci::matcher::match(vfs::devfs::busdev *bus, void *aux) {
+    *pci::ahcibus::matcher::match(vfs::devfs::busdev *bus, void *aux) {
     return frg::construct<ahcibus>(memory::mm::heap, bus, (pci::device *) aux);
 }
 
-void pci::ahci::matcher::attach(vfs::devfs::busdev *bus, vfs:: devfs::device *dev, void *aux) {
+void pci::ahcibus::matcher::attach(vfs::devfs::busdev *bus, vfs:: devfs::device *dev, void *aux) {
     return;
 }
 
@@ -120,7 +120,7 @@ void pci::ahcibus::enumerate() {
                 ::ahci::setup_args args{
                     // bus_addr_t addr, bus_size_t size, bool linear
                     .bar = frg::construct<pci_space>(memory::mm::heap, pci_bar.base, pci_bar.size, pci_bar.is_mmio),
-                    .port = frg::construct<pci_space>(memory::mm::heap, (bus_addr_t) &ahci_bar->ports[i], sizeof(::ahci::port), true),
+                    .port = frg::construct<pci_space>(memory::mm::heap, (bus_addr_t) memory::remove_virt(&ahci_bar->ports[i]), sizeof(::ahci::port), true),
                 };
 
                 attach(dtable::majors::AHCI, &args);
@@ -132,6 +132,6 @@ void pci::ahcibus::enumerate() {
     }
 }
 
-unique_ptr<vfs::devfs::bus_dma> pci::ahcibus::get_dma(size_t size) {
+shared_ptr<vfs::devfs::bus_dma> pci::ahcibus::get_dma(size_t size) {
     return this->bus->get_dma(size);
 }

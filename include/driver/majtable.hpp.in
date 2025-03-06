@@ -1,0 +1,14 @@
+#ifndef MAJORS_HPP
+#define MAJORS_HPP
+
+#include <cstddef>
+
+// match_data is bus-specific
+
+namespace dtable {
+    namespace majors {
+@@DTABLE_MAJORS@@
+    }
+}
+
+#endif

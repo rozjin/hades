@@ -4,6 +4,7 @@
 #include "mm/common.hpp"
 #include "mm/mm.hpp"
 #include "mm/pmm.hpp"
+#include "smarter/smarter.hpp"
 #include "util/types.hpp"
 #include <cstddef>
 #include <cstdint>
@@ -123,48 +124,57 @@ namespace pci {
             return 0;
         }
     
-        uint64_t reg_idx = 0x10 + (index * 4);
-        uint64_t bar = readd(reg_idx);
-        uint64_t bar_hi, bar_size, bar_size_hi = 0;
-    
+        uint32_t reg_idx = 0x10 + (index * 4);
+        uint32_t bar = readd(reg_idx);
+
         if (!bar) {
             return 0;
         }
     
         uint64_t base;
-        uint64_t size;
+        uint32_t size;
     
         uint8_t is_mmio = !(bar & 1);
         uint8_t is_prefetchable = is_mmio && bar & (1 << 3);
-        uint8_t is_long = is_mmio && ((bar>> 1) & 0x3) == 0x2;
-    
+        uint8_t is_long = ((bar >> 1) & 0x3) == 0x2;
+
         writed(reg_idx, ~0);
-        bar_size = readd(reg_idx);
+        size = readd(reg_idx);
         writed(reg_idx, bar);
-    
-        if (is_long) {
-            bar_hi = readd(reg_idx + 4);
-    
-            writed(reg_idx + 4, ~0);
-            bar_size_hi = readd(reg_idx + 4);
-            writed(reg_idx + 4, bar_hi);
-    
-            size = ((bar_size_hi << 32) | bar_size) & ~(is_mmio ? 0b1111 : 0b11);
-            size = ~size + 1;
-    
-            base = ((bar_hi << 32) | bar) & ~(is_mmio ? 0b1111 : 0b11);
+
+        if (!is_mmio) {
+            size &= ~0x3;
+            size = (~size) + 1;
+
+            base = bar & ~0x3;
+
+            bar_out.base = base;
+            bar_out.size = size;
+            bar_out.is_mmio = is_mmio;
+            bar_out.is_prefetchable = is_prefetchable;
+            bar_out.valid = true;
         } else {
-            base = bar;
-            size = bar_size & is_mmio ? 0b1111 : 0b11;
-            size = ~size + 1;
+            uint64_t bar_hi, size_hi = 0;
+            if (is_long) {
+                bar_hi = readd(reg_idx + 4);
+        
+                writed(reg_idx + 4, ~0);
+                size_hi = readd(reg_idx + 4);
+                writed(reg_idx + 4, bar_hi);
+            }
+
+            size &= ~0xF;
+            size = (~size) + 1;
+
+            base = bar & ~0xF;
+
+            bar_out.base = is_long ? (bar_hi << 32) | base : base;
+            bar_out.size = is_long ? (size_hi << 32) | size : size;
+            bar_out.is_mmio = is_mmio;
+            bar_out.is_prefetchable = is_prefetchable;
+            bar_out.valid = true;
         }
-    
-        bar_out.base = base;
-        bar_out.size = size;
-        bar_out.is_mmio = is_mmio;
-        bar_out.is_prefetchable = is_prefetchable;
-        bar_out.valid = true;
-    
+
         return 1;
     }
     
@@ -509,7 +519,7 @@ pci::device *pcibus::get_device(uint16_t vendor, uint16_t device) {
 
 void pcibus::attach(ssize_t major, void *aux) {
     switch(major) {
-        case PCI_MAJOR: {
+        case dtable::majors::PCI: {
             auto info = (pci::attach_args *) aux;
 
             pcibus *secondary_bus = frg::construct<pcibus>(memory::mm::heap, this,
@@ -558,21 +568,15 @@ void pcibus::attach(ssize_t major, void *aux) {
 void pcibus::enumerate() {
     for (size_t slot = 0; slot < pci::MAX_DEVICE; slot++) {
         if (pci::is_function(bus, slot, 0)) {
+            pci::attach_args info{
+                .bus = (uint8_t) bus,
+                .slot = (uint8_t) slot,
+                .func = 0
+            };
+
             if (pci::is_bridge(bus, slot, 0)) {
-                pci::attach_args info{
-                    .bus = (uint8_t) bus,
-                    .slot = (uint8_t) slot,
-                    .func = 0
-                };
-
-                attach(PCI_MAJOR, &info);
+                attach(dtable::majors::PCI, &info);
             } else {
-                pci::attach_args info{
-                    .bus = (uint8_t) bus,
-                    .slot = (uint8_t) slot,
-                    .func = 0
-                };
-
                 attach(-1, &info);
             }
 
@@ -586,7 +590,7 @@ void pcibus::enumerate() {
                         };
 
                         if (pci::is_bridge(bus, slot, func)) {        
-                            attach(PCI_MAJOR, &info);                  
+                            attach(dtable::majors::PCI, &info);                  
                         } else {
                             attach(-1, &info);
                         }
@@ -599,17 +603,17 @@ void pcibus::enumerate() {
     }
 }
 
-unique_ptr<vfs::devfs::bus_dma> pcibus::get_dma(size_t size) {
-    return unique_ptr<vfs::devfs::bus_dma>(memory::mm::heap,
-        frg::construct<pci_dma>(memory::mm::heap, size));
+shared_ptr<vfs::devfs::bus_dma> pcibus::get_dma(size_t size) {
+    return smarter::allocate_shared<pci_dma>(memory::mm::heap,
+        size);
 }
 
 bus_size_t pci_dma::vaddr() {
-    return memory::add_virt(addr);
+    return addr;
 }
 
 bus_size_t pci_dma::paddr() {
-    return addr;
+    return memory::remove_virt(addr);
 }
 
 bus_addr_t pci_dma::map(void *vaddr) {
@@ -649,56 +653,56 @@ void *pci_space::vaddr(bus_handle_t handle) {
 }
 
 uint8_t pci_space::readb(bus_handle_t handle, bus_size_t offset) {
-    if (offset > size || handle < addr || handle + offset > addr) return (uint8_t) -1;
+    if (offset > size || handle < addr || handle + offset > addr + size) return (uint8_t) -1;
 
     if (linear) return *(uint8_t *) (memory::add_virt(handle + offset));
     return io::readb(addr + offset);
 }
 
 uint16_t pci_space::readw(bus_handle_t handle, bus_size_t offset) {
-    if (offset > size || handle < addr || handle + offset > addr) return (uint16_t) -1;
+    if (offset > size || handle < addr || handle + offset > addr + size) return (uint16_t) -1;
 
     if (linear) return *(uint16_t *) (memory::add_virt(handle + offset));
     return io::readw(addr + offset);
 }
 
 uint32_t pci_space::readd(bus_handle_t handle, bus_size_t offset) {
-    if (offset > size || handle < addr || handle + offset > addr) return (uint32_t) -1;
+    if (offset > size || handle < addr || handle + offset > addr + size) return (uint32_t) -1;
 
     if (linear) return *(uint32_t *) (memory::add_virt(handle + offset));
     return io::readd(addr + offset);
 }
 
 uint64_t pci_space::readq(bus_handle_t handle, bus_size_t offset) {
-    if (offset > size || handle < addr || handle + offset > addr) return (uint64_t) -1;
+    if (offset > size || handle < addr || handle + offset > addr + size) return (uint64_t) -1;
 
     if (linear) return *(uint64_t *) (memory::add_virt(handle + offset));
     return (uint64_t) -1;
 }
 
 void pci_space::writeb(bus_handle_t handle, bus_size_t offset, uint8_t val) {
-    if (offset > size || handle < addr || handle + offset > addr) return;
+    if (offset > size || handle < addr || handle + offset > addr + size) return;
 
     if (linear) *(uint8_t*) (memory::add_virt(handle + offset)) = val;
     else io::writeb(handle + offset, val);
 }
 
 void pci_space::writew(bus_handle_t handle, bus_size_t offset, uint16_t val) {
-    if (offset > size || handle < addr || handle + offset > addr) return;
+    if (offset > size || handle < addr || handle + offset > addr + size) return;
 
     if (linear) *(uint16_t*) (memory::add_virt(handle + offset)) = val;
     else io::writew(handle + offset, val);
 }
 
 void pci_space::writed(bus_handle_t handle, bus_size_t offset, uint32_t val) {
-    if (offset > size || handle < addr || handle + offset > addr) return;
+    if (offset > size || handle < addr || handle + offset > addr + size) return;
 
     if (linear) *(uint32_t*) (memory::add_virt(handle + offset)) = val;
     else io::writed(handle + offset, val);
 }
 
 void pci_space::writeq(bus_handle_t handle, bus_size_t offset, uint64_t val) {
-    if (offset > size || handle < addr || handle + offset > addr) return;
+    if (offset > size || handle < addr || handle + offset > addr + size) return;
 
     if (linear) *(uint64_t*) (memory::add_virt(handle + offset)) = val;
     else return;

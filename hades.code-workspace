@@ -110,7 +110,11 @@
             "ctime": "cpp",
             "text_encoding": "cpp",
             "stdint.h": "c",
-            "stdint-gcc.h": "c"
+            "stdint-gcc.h": "c",
+            "tlsf.hpp": "c",
+            "stdbool.h": "c",
+            "string.hpp": "c",
+            "stddef.h": "c"
         },
         "C_Cpp.default.compileCommands": "/home/racemus/projects/hades/build/compile_commands.json",
         "C_Cpp.default.configurationProvider": "mesonbuild.mesonbuild"

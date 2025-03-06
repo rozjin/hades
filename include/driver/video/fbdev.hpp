@@ -126,7 +126,7 @@ namespace fb {
     };
 
     struct matcher: vfs::devfs::matcher {
-        matcher(): vfs::devfs::matcher(true,
+        matcher(): vfs::devfs::matcher(true, false,
             "fb", nullptr, false, 0) {}
     };
 }

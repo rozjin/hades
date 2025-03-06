@@ -111,6 +111,11 @@ namespace tty {
     };
 
     struct self: vfs::devfs::chardev {
+        struct matcher: vfs::devfs::matcher {
+            matcher(): vfs::devfs::matcher(true, true,
+            "tty", nullptr, false, 0) {}
+        };
+
         static void init();
         ssize_t on_open(vfs::fd *fd, ssize_t flags) override;    
         

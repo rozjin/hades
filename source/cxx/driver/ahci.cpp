@@ -42,7 +42,7 @@ ssize_t ahci::device::find_cmdslot() {
 
 ahci::command_slot ahci::device::get_command(uint64_t fis_size) {
     auto slot_dma = bus->get_dma(fis_size);
-    ahci::command_slot slot = {-1, nullptr, std::move(slot_dma)};
+    ahci::command_slot slot = {-1, nullptr, slot_dma};
 
     auto slot_idx = find_cmdslot();
     if (slot_idx == -1) {

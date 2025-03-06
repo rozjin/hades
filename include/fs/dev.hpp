@@ -3,6 +3,7 @@
 
 #include "frg/string.hpp"
 #include "mm/common.hpp"
+#include "smarter/smarter.hpp"
 #include "util/types.hpp"
 #include <cstddef>
 #include <frg/hash.hpp>
@@ -33,6 +34,7 @@ namespace vfs {
 
             struct matcher {
                 bool has_file;
+                bool single;
 
                 const char *base_name;
                 const char *subdir;
@@ -42,9 +44,9 @@ namespace vfs {
                 virtual device *match(devfs::busdev *bus, void *aux) { return nullptr; }
                 virtual void attach(devfs::busdev *bus, devfs::device *dev, void *aux) { return; }
 
-                matcher(bool has_file, const char *base_name, const char *subdir,
+                matcher(bool has_file, bool single, const char *base_name, const char *subdir,
                         bool alpha_names, size_t start_index):
-                    has_file(has_file), base_name(base_name), subdir(subdir), alpha_names(alpha_names), start_index(0) {}
+                    has_file(has_file), single(single), base_name(base_name), subdir(subdir), alpha_names(alpha_names), start_index(0) {}
             };
 
             struct bus_space {
@@ -131,7 +133,7 @@ namespace vfs {
                 virtual void enumerate() = 0;
                 virtual void attach(ssize_t major, void *aux) = 0;
 
-                virtual unique_ptr<bus_dma> get_dma(size_t size) { return unique_ptr<bus_dma>(memory::mm::heap, nullptr); }
+                virtual shared_ptr<bus_dma> get_dma(size_t size) { return nullptr; }
 
                 busdev(devfs::busdev *bus, ssize_t major, ssize_t minor, void *aux): device(bus, major, minor, aux, devfs::device_class::BUS) { }
             };

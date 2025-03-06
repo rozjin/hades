@@ -1,36 +1,12 @@
 import os
 
-dtable_template = """#ifndef DTABLE_HPP
-#define DTABLE_HPP
+def read_file(path):
+    contents = ""
+    with open(path) as f:
+        return f.read()
 
-#include <cstddef>
-#include <fs/dev.hpp>
-#include <driver/matchers.hpp>
-
-// match_data is bus-specific
-
-namespace dtable {
-    constexpr size_t MATCH_ANY = 0xFFFF;
-    struct entry {
-        int match_data[16];
-        ssize_t major;
-        vfs::devfs::matcher *matcher;
-    };
-
-    namespace majors {
-@@DTABLE_MAJORS@@
-    }
-
-    static entry entries[] = {
-@@DTABLE_ENTRIES@@
-    };
-
-    vfs::devfs::matcher *lookup_by_data(int *match_data, size_t len);
-    vfs::devfs::matcher *lookup_by_major(ssize_t major);
-}
-
-#endif
-"""
+dtable_in = read_file(os.path.join("include", "driver", "dtable.hpp.in"))
+majtable_in = read_file(os.path.join("include", "driver", "majtable.hpp.in"))
 
 entries = []
 majors = []
@@ -64,9 +40,14 @@ with open("dtable") as tbl_file:
 
             majors.append(f"        constexpr size_t {name} = {major};")
 
-dtable = dtable_template
+dtable = dtable_in
+majtable = majtable_in
 
 dtable = dtable.replace("@@DTABLE_ENTRIES@@", ",\n".join(entries))
-dtable = dtable.replace("@@DTABLE_MAJORS@@", "\n".join(majors))
+majtable = majtable.replace("@@DTABLE_MAJORS@@", "\n".join(majors))
+
 with open(os.path.join("include", "driver", "dtable.hpp"), "w+") as dtable_hpp:
     dtable_hpp.write(dtable)
+
+with open(os.path.join("include", "driver", "majtable.hpp"), "w+") as majtable_hpp:
+    majtable_hpp.write(majtable)

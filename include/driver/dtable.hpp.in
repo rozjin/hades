@@ -1,0 +1,27 @@
+#ifndef DTABLE_HPP
+#define DTABLE_HPP
+
+#include <cstddef>
+#include <fs/dev.hpp>
+#include <driver/matchers.hpp>
+#include <driver/majtable.hpp>
+
+// match_data is bus-specific
+
+namespace dtable {
+    constexpr size_t MATCH_ANY = 0xFFFF;
+    struct entry {
+        int match_data[16];
+        ssize_t major;
+        vfs::devfs::matcher *matcher;
+    };
+
+    static entry entries[] = {
+@@DTABLE_ENTRIES@@
+    };
+
+    vfs::devfs::matcher *lookup_by_data(int *match_data, size_t len);
+    vfs::devfs::matcher *lookup_by_major(ssize_t major);
+}
+
+#endif

@@ -22,9 +22,9 @@
  *
  */
 
-
-#include "mm/common.hpp"
+#include "util/misc.hpp"
 #include <cstddef>
+#include <mm/common.hpp>
 #include <mm/pmm.hpp>
 #include <mm/mm.hpp>
 
@@ -67,6 +67,14 @@
 }
 
 util::spinlock mm_lock{};
+extern "C" char __boot_heap_start[];
+extern "C" char __boot_heap_end[];
+
+static char *boot_heap = __boot_heap_start;
+constexpr size_t boot_heap_max = 32 * memory::page_size;
+
+static void *kernel_heap = nullptr;
+
 struct memory_pebble;
 struct memory_bucket;
 
@@ -108,7 +116,7 @@ memory_bucket* create_bucket(size_t size) {
   // size must be a even number of pages
   size = (size + (memory::page_size - 1)) & ~(memory::page_size - 1);
 
-  memory_bucket* bucket = (memory_bucket* ) pmm::alloc(size / memory::page_size);
+  memory_bucket* bucket = (memory_bucket* ) pmm::alloc(size / memory::page_size);;
   if (bucket != NULL) {
     bucket->magic = MALLOC_MAGIC_BUCKET;
     bucket->lflags = BUCKET_FLAG_FIRST;
@@ -165,11 +173,6 @@ memory_bucket* place_bucket(void *start, size_t size) {
 
     return bucket;
   }
-
-extern "C" char __boot_heap_start[];
-extern "C" char __boot_heap_end[];
-
-static void *kernel_heap = nullptr;
 
 // insert a bucket at destination
 void insert_bucket(memory_bucket* bucket, void *destination) {
@@ -327,11 +330,9 @@ memory_pebble* shrink_pebble(memory_pebble* pebble, size_t size) {
 }
 
 void *kmalloc(size_t size) {
-    if (kernel_heap == nullptr) {
-        kernel_heap = __boot_heap_start;
-        place_bucket(kernel_heap, 128 * memory::page_size);
-    }
-
+  if (kernel_heap == nullptr) {
+    kernel_heap = place_bucket(boot_heap, boot_heap_max);
+  }
   void *ret = NULL;
 
   // minimum amount of memory we allocate to the caller

@@ -78,7 +78,6 @@ main_sources = files(
     'source/cxx/entry.cpp'
 )
 main_includes = include_directories('include')
-freestnd_c_hdrs = include_directories('freestnd_c_hdrs', is_system: true)
 freestnd_cpp_hdrs = include_directories('freestnd_cpp_hdrs', is_system: true)
 
 nasm_sources = files(
@@ -120,7 +119,7 @@ flags_c = [
 ]
 
 flags_cpp = [
-    '-std=gnu++2b',
+    '-std=gnu++2c',
 	'-fno-rtti',
 	'-fno-exceptions',
 	'-fuse-cxa-atexit',

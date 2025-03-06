@@ -15,7 +15,7 @@ namespace pci {
             vfs::devfs::device *match(vfs::devfs::busdev *bus, void *aux) override;
             void attach(vfs::devfs::busdev *bus, vfs::devfs::device *dev, void *aux) override;
 
-            matcher(): vfs::devfs::matcher(false,
+            matcher(): vfs::devfs::matcher(false, false,
                 nullptr, nullptr, false, 0) {}
         };
     }    

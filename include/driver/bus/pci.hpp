@@ -1,6 +1,7 @@
 #ifndef PCI_HPP
 #define PCI_HPP
 
+#include "driver/majtable.hpp"
 #include "fs/dev.hpp"
 #include "mm/pmm.hpp"
 #include "util/types.hpp"
@@ -23,8 +24,8 @@ namespace pci {
     static constexpr size_t MAX_BUS      = 256;
 
     struct bar {
-        size_t base;
-        size_t size;
+        uint64_t base;
+        uint32_t size;
         bool is_mmio;
         bool is_prefetchable;
         bool valid;
@@ -129,7 +130,7 @@ namespace pci {
 };
 
 struct pci_dma: vfs::devfs::bus_dma {
-    pci_dma(bus_size_t len): bus_dma(len) { addr = (bus_addr_t) pmm::phys(util::ceil(len, memory::page_size)); }
+    pci_dma(bus_size_t len): bus_dma(len) { addr = (bus_addr_t) pmm::alloc(util::ceil(len, memory::page_size)); }
     ~pci_dma() { if (addr) { pmm::free((void *) addr); } }
 
     bus_addr_t vaddr() override;
@@ -183,7 +184,6 @@ struct pci_space: vfs::devfs::bus_space {
     void write_multiq(bus_handle_t handle, bus_size_t offset, uint64_t *data, size_t count) override;
 };
 
-constexpr size_t PCI_MAJOR = 0xF;
 struct pcibus: vfs::devfs::busdev {
     private:
         uint8_t bus;
@@ -196,10 +196,10 @@ struct pcibus: vfs::devfs::busdev {
         void enumerate() override;
         void attach(ssize_t major, void *aux) override;
 
-        unique_ptr<vfs::devfs::bus_dma> get_dma(size_t size) override;
+        shared_ptr<vfs::devfs::bus_dma> get_dma(size_t size) override;
 
         pcibus(vfs::devfs::busdev *bus,
-            uint8_t pci_bus = 0): vfs::devfs::busdev(bus, PCI_MAJOR, -1, nullptr), bus(pci_bus), devices() {};
+            uint8_t pci_bus = 0): vfs::devfs::busdev(bus, dtable::majors::PCI, -1, nullptr), bus(pci_bus), devices() {};
 };
 
 

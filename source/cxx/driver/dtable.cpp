@@ -1,6 +1,6 @@
-#include "util/misc.hpp"
 #include <cstddef>
 #include <driver/dtable.hpp>
+#include <util/misc.hpp>
 
 bool match_values(int *dtable_data, int *match_data, size_t len) {
     for (size_t i = 0; i < len; i++) {

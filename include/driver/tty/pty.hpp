@@ -19,7 +19,7 @@ namespace tty {
             friend struct ptm;
 
             struct matcher: vfs::devfs::matcher {
-                matcher(): vfs::devfs::matcher("true",
+                matcher(): vfs::devfs::matcher(true, false,
                 nullptr, "pts", false, 0) {}
             };
 
@@ -37,7 +37,7 @@ namespace tty {
             friend struct pts;
 
             struct matcher: vfs::devfs::matcher {
-                matcher(): vfs::devfs::matcher(false,
+                matcher(): vfs::devfs::matcher(false, false,
                 nullptr, nullptr, false, 0) {}
             };
 
@@ -52,6 +52,11 @@ namespace tty {
     };
 
     struct ptmx: vfs::devfs::chardev {
+        struct matcher: vfs::devfs::matcher {
+            matcher(): vfs::devfs::matcher(true, true,
+            "ptmx", nullptr, false, 0) {}
+        };
+
         static void init();
         ssize_t on_open(vfs::fd *fd, ssize_t flags) override;
 

@@ -4,14 +4,7 @@
 #include <utility>
 
 namespace frg {
-
-template<typename T>
-struct _none_allocator {
-    void free(T *ptr) {
-        return;
-    }
-};
-
+    
 template <typename T, typename Allocator>
 struct unique_ptr {
 	friend void swap(unique_ptr &a, unique_ptr &b) {

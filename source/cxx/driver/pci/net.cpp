@@ -71,9 +71,6 @@ void pci::net::matcher::attach(vfs::devfs::busdev *bus, vfs::devfs::device *dev,
 
             size_t vector = arch::install_irq(e1000::irq_handler, e1000_dev);
             arch::route_irq(irq_resource.base, vector);
-
-            bus->bus_devices.push_back(e1000_dev);
-            vfs::devfs::append_device(e1000_dev, dtable::majors::NET);
         }
     }
 }

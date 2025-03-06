@@ -18,12 +18,6 @@ inline void kfree_sz(void *ptr, size_t _) {
 
 namespace memory {
     namespace mm {
-        namespace allocator {
-            void *malloc(size_t req_size);
-            void *calloc(size_t nr_items, size_t size);
-            void free(void *ptr);
-        };
-        
         struct heap_allocator {
             void *allocate(size_t size) {
                 return kmalloc(size);

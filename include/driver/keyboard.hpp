@@ -14,7 +14,7 @@ namespace kb {
     void irq_handler(arch::irq_regs *r);
 
     struct matcher: vfs::devfs::matcher {
-        matcher(): vfs::devfs::matcher(false,
+        matcher(): vfs::devfs::matcher(false, false,
             nullptr, nullptr, false, 0) {}
     };
 };

@@ -68,7 +68,7 @@ namespace util {
 
     template<typename T, size_t N>
     constexpr size_t lengthof(T const (&)[N]) {
-        return N - 1;
+        return N;
     }
 
     template<typename T>

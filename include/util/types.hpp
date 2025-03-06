@@ -1,6 +1,7 @@
 #ifndef TYPES_HPP
 #define TYPES_HPP
 
+#include <smarter/smarter.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <frg/unique.hpp>
@@ -134,6 +135,9 @@ using bus_handle_t = uintptr_t;
 
 template<typename T>
 using unique_ptr = frg::unique_ptr<T, memory::mm::heap_allocator>;
+
+template <typename T>
+using shared_ptr = smarter::shared_ptr<T>;
 
 constexpr char alpha_lower[] = "abcdefghijklmnopqrstuvwxyz";
 
