@@ -1,0 +1,15 @@
+#ifndef PROTOCOL_@@INTERFUPPER@@_HPP
+#define PROTOCOL_@@INTERFUPPER@@_HPP
+
+#include <frg/functional.hpp>
+#include <ipc/message.hpp>
+#include <ipc/port.hpp>
+#include <util/types.hpp>
+
+namespace ipc {
+    namespace protocols {
+@@INTERFACE@@    
+    }
+}
+
+#endif

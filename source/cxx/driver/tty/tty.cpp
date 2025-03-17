@@ -1,5 +1,6 @@
 #include "driver/dtable.hpp"
 #include "driver/video/vesa.hpp"
+#include "ipc/evtable.hpp"
 #include "util/lock.hpp"
 #include "util/types.hpp"
 #include <arch/types.hpp>
@@ -251,8 +252,8 @@ ssize_t tty::device::poll(sched::thread *thread) {
     for (;;) {
         if (__atomic_load_n(&in.items, __ATOMIC_RELAXED) >= 0) break; 
 
-        auto [evt, _] = ipc::receive({ KBD_PRESS }, true);
-        if (!evt) {
+        auto [evt, _] = kb::wire.wait(evtable::KB_PRESS, true);
+        if (evt < 0) {
             return -1;
         }
     }

@@ -18,11 +18,19 @@
 static log::subsystem logger = log::make_subsystem("E1000");
 
 void e1000::device::write(uint16_t off, uint32_t value) {
-    reg_space->writed(reg_handle, off, value);
+    if (reg_space->is_linear()) reg_space->writed(reg_handle, off, value);
+    else {
+        reg_space->writed(reg_handle, 0, off);
+        reg_space->writed(reg_handle, 4, value);
+    }
 }
 
 uint32_t e1000::device::read(uint16_t off) {
-    return reg_space->readb(reg_handle, off);
+    if (reg_space->is_linear()) return reg_space->readd(reg_handle, off);
+    else {
+        reg_space->writed(reg_handle, 0, off);
+        return reg_space->readd(reg_handle, 4);
+    }
 }
 
 bool e1000::device::check_eeprom() {
@@ -47,10 +55,10 @@ uint32_t e1000::device::read_eeprom(uint8_t off) {
     uint32_t tmp = 0;
 
     if (has_eeprom) {
-        write(reg_eeprom_read, (1 << 0) | ((uint32_t)(off) << 8));
+        write(reg_eeprom_read, (1 << 0) | ((uint16_t (off)) << 8));
         while (!((tmp = read(reg_eeprom_read)) & (1 << 4))) asm volatile("pause");
     } else {
-        write(reg_eeprom_read, (1 << 0) | ((uint32_t)(off) << 2));
+        write(reg_eeprom_read, (1 << 0) | ((uint16_t (off)) << 2));
         while (!((tmp = read(reg_eeprom_read)) & (1 << 1))) asm volatile("pause");
     }
 
@@ -227,13 +235,13 @@ bool e1000::device::setup() {
     write(reg_rx_delay_tmr, bit_rx_delay_tmr_fpd | 0);
     write(reg_itr, 5000);
 
-    enable_irq();
-    net::arp::arp_probe(this, this->ipv4_gateway);
-
     return true;
 }
 
 void e1000::device::init_routing() {
+    enable_irq();
+    net::arp::arp_probe(this, this->ipv4_gateway);
+
     add_route(net::broadcast_ipv4, ipv4_gateway_addr, net::broadcast_ipv4);
     add_route(ipv4_gateway_addr, net::broadcast_ipv4, "255.255.255.0", ~(0xFF));
 }
@@ -281,6 +289,10 @@ void e1000::device::send(const void *buf, size_t len) {
     write(reg_tx_desc_tail, tx_cur);
 
     while ((tx_descs[old_tx_cur]->status & tx_desc::tx_bit_done) == 0) { asm volatile("pause"); }
+}
+
+size_t e1000::device::get_vector() {
+    return irq_vector;
 }
 
 void e1000::irq_handler(arch::irq_regs *r, void *aux) {

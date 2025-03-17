@@ -144,6 +144,8 @@ struct pci_space: vfs::devfs::bus_space {
     pci_space(bus_addr_t addr, bus_size_t size, bool linear)
     : vfs::devfs::bus_space(addr, size, linear) {}
 
+    bool is_linear() override { return linear; };
+
     bus_handle_t map(bus_addr_t offset, bus_size_t size) override;
     void unmap(bus_handle_t handle) override;
     void *vaddr(bus_handle_t handle) override;

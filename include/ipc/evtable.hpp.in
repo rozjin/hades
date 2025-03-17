@@ -1,0 +1,10 @@
+#ifndef EVTABLE_HPP
+#define EVTABLE_HPP
+
+#include <cstddef>
+
+namespace evtable {
+@@EVTABLE_ENTRIES@@
+}
+
+#endif

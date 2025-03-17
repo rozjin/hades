@@ -13,7 +13,7 @@ extern "C" {
     }
 
 	void FRG_INTF(panic)(const char *cstring) {
-        panic("[FRG | PANIC]: ", cstring);
+        panic("[FRG | PANIC]: %s", cstring);
     }
 
     void __cxa_pure_virtual() {

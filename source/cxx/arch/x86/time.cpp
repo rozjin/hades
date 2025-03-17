@@ -1,5 +1,5 @@
+#include "ipc/evtable.hpp"
 #include "mm/mm.hpp"
-#include "sys/sched/event.hpp"
 #include <arch/x86/smp.hpp>
 #include <cstddef>
 #include <sys/sched/sched.hpp>
@@ -10,34 +10,27 @@
 
 sched::timespec sched::clock_rt{};
 sched::timespec sched::clock_mono{};
-frg::vector<sched::timer *, memory::mm::heap_allocator> sched::timers{};
+frg::vector<sched::timer, memory::mm::heap_allocator> sched::timers{};
 
-void arch::start_bsp() {
-    pit::init();
-    apic::lapic::set_timer(1);
-}
-
-void arch::add_timer(sched::timer *timer) {
+void arch::add_timer(sched::timer timer) {
     sched::timers.push_back(timer);
 }
 
 void arch::tick_clock(long nanos) {
     sched::timespec interval = { .tv_sec = 0, .tv_nsec = nanos };
-    sched::uptime += interval.tv_nsec;
 
     sched::clock_rt = sched::clock_rt + interval;
     sched::clock_mono = sched::clock_mono + interval;
 
-    for (size_t i = 0; i < sched::timers.size(); i++) {
-        auto timer = sched::timers[i];
-        if (timer == nullptr) continue;
-
+    for (auto timer = sched::timers.begin(); timer != sched::timers.end();) {
         timer->spec = timer->spec - interval;
         if (timer->spec.tv_nsec == 0 && timer->spec.tv_sec == 0) {
-            ipc::send({timer->tid}, TIME_WAKE);
+            timer->wire->arise(evtable::TIME_WAKE);
 
             frg::destruct(memory::mm::heap, timer);
-            sched::timers[i] = nullptr;
+            timer = sched::timers.erase(timer);
+        } else {
+            ++timer;
         }
     }
 }

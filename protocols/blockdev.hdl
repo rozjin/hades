@@ -1,0 +1,10 @@
+interface blockdev {
+    on_open(fd: ptr, flags: ssize_t) => ssize_t
+    on_close(fd: ptr, flags: ssize_t) => ssize_t
+
+    read(buf: ptr, len: size_t, offset: size_t) => ssize_t
+    write(buf: ptr, len: size_t, offset: size_t) => ssize_t
+    ioctl(req: size_t, buf: ptr) => ssize_t
+
+    poll(thread: ptr) => ssize_t
+}

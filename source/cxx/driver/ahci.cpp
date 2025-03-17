@@ -1,7 +1,6 @@
 #include "util/lock.hpp"
 #include <arch/types.hpp>
 #include <sys/sched/sched.hpp>
-#include <sys/sched/event.hpp>
 #include <util/misc.hpp>
 #include <cstddef>
 #include <cstdint>

@@ -55,16 +55,20 @@ main_sources = files(
     'source/cxx/fs/syscall.cpp',
     'source/cxx/fs/vfs.cpp',
 
+    'source/cxx/ipc/wire.cpp',
+    'source/cxx/ipc/port.cpp',
+    'source/cxx/ipc/link.cpp',
+
     'source/cxx/mm/ctx.cpp',
     'source/cxx/mm/mm.cpp',
     'source/cxx/mm/pmm.cpp',
     'source/cxx/mm/vmm.cpp',
 
     'source/cxx/sys/sched/loader.cpp',
+    'source/cxx/sys/sched/management.cpp',
     'source/cxx/sys/sched/sched.cpp',
     'source/cxx/sys/sched/signal.cpp',
     'source/cxx/sys/sched/syscall.cpp',
-    'source/cxx/sys/sched/event.cpp',
 
     'source/cxx/sys/acpi.cpp',
     'source/cxx/sys/laihost.cpp',

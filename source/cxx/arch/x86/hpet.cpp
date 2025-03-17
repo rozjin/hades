@@ -68,7 +68,8 @@ void hpet::init() {
         allowed_routes >>= 1;
     }
 
-    size_t vector = arch::install_irq(hpet_tick_handler);
+    size_t vector = arch::alloc_vector();
+    arch::install_vector(vector, hpet_tick_handler);
     arch::route_irq(used_route, vector);
 
     uint32_t period = hpet_regs->capabilities >> 32;

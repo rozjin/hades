@@ -3,7 +3,6 @@
 
 #include "frg/string.hpp"
 #include "mm/common.hpp"
-#include "smarter/smarter.hpp"
 #include "util/types.hpp"
 #include <cstddef>
 #include <frg/hash.hpp>
@@ -11,7 +10,6 @@
 #include <frg/tuple.hpp>
 #include <frg/vector.hpp>
 #include <fs/vfs.hpp>
-#include <sys/sched/event.hpp>
 #include <mm/mm.hpp>
 #include <util/errors.hpp>
 
@@ -56,10 +54,12 @@ namespace vfs {
                     bool linear;
                 public:
                     bus_space() = delete;
-                    
+
                     bus_space(bus_addr_t addr, bus_size_t size, bool linear)
                         : addr(addr), size(size), linear(linear) {}
                     ~bus_space() {}
+
+                    virtual bool is_linear() = 0;
 
                     virtual bus_handle_t map(bus_addr_t offset, bus_size_t size) = 0;
                     virtual void unmap(bus_handle_t handle) = 0;
@@ -74,7 +74,7 @@ namespace vfs {
                     virtual void writew(bus_handle_t handle, bus_size_t offset, uint16_t val) = 0;
                     virtual void writed(bus_handle_t handle, bus_size_t offset, uint32_t val) = 0;
                     virtual void writeq(bus_handle_t handle, bus_size_t offset, uint64_t val) = 0;
-                    
+
                     virtual void read_regionb(bus_handle_t handle, bus_size_t offset, uint8_t *data, size_t count) = 0;
                     virtual void read_regionw(bus_handle_t handle, bus_size_t offset, uint16_t *data, size_t count) = 0;
                     virtual void read_regiond(bus_handle_t handle, bus_size_t offset, uint32_t *data, size_t count) = 0;
@@ -150,6 +150,8 @@ namespace vfs {
 
                 virtual ssize_t poll(sched::thread *thread) = 0;
 
+                virtual ssize_t force_dismount() = 0;
+
                 filedev(devfs::busdev *bus, ssize_t major, ssize_t minor, void *aux, device_class cls): device(bus, major, minor, aux, cls) {};
             };
 
@@ -162,11 +164,13 @@ namespace vfs {
                         size_t begin;
                         partition(size_t blocks, size_t begin) : blocks(blocks), begin(begin) { };
                     };
+                    frg::vector<partition, memory::mm::heap_allocator> part_list;
+
+                    frg::vector<filesystem *, memory::mm::heap_allocator> fs_list;
 
                     size_t blocks;
                     size_t block_size;
-                    frg::vector<partition, memory::mm::heap_allocator> part_list;
-
+                    
                     cache::holder *disk_cache;
 
                     virtual ssize_t on_open(vfs::fd *fd, ssize_t flags) override { return -ENOTSUP; }
@@ -177,7 +181,9 @@ namespace vfs {
                     virtual ssize_t ioctl(size_t req, void *buf) override { return 0; }
 
                     virtual ssize_t poll(sched::thread *thread) override { return POLLIN | POLLOUT; }
-                    
+
+                    virtual ssize_t force_dismount() override { return -ENOTSUP; }
+
                     blockdev(devfs::busdev *bus, ssize_t major, ssize_t minor, void *aux): filedev(bus, major, minor, aux, devfs::device_class::BLOCKDEV) {}
             };
 
@@ -192,6 +198,8 @@ namespace vfs {
 
                     virtual ssize_t poll(sched::thread *thread) override { return 0; }
 
+                    virtual ssize_t force_dismount() override { return -ENOTSUP; }
+
                     chardev(devfs::busdev *bus, ssize_t major, ssize_t minor, void *aux): filedev(bus, major, minor, aux, devfs::device_class::CHARDEV) {}
             };
 
@@ -203,13 +211,13 @@ namespace vfs {
             static constexpr size_t MAINBUS_MAJOR = 0xAF;
             struct rootbus: busdev {
                 void enumerate() override;
-                void attach(ssize_t major, void *aux) override;                
+                void attach(ssize_t major, void *aux) override;
 
                 rootbus(): vfs::devfs::busdev(nullptr, MAINBUS_MAJOR, -1, nullptr) {};
             };
 
             static rootbus *mainbus;
-            
+
             static void init();
             static void probe();
 
@@ -219,9 +227,9 @@ namespace vfs {
 
                 device_list(): list(), last_index(0) {}
             };
-            
+
             inline static frg::hash_map<
-                size_t, 
+                size_t,
                 device_list,
                 frg::hash<size_t>,
                 memory::mm::heap_allocator>

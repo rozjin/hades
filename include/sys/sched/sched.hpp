@@ -1,8 +1,10 @@
 #ifndef SCHED_HPP
 #define SCHED_HPP
 
+#include "arch/types.hpp"
+#include "frg/list.hpp"
 #include <arch/x86/types.hpp>
-#include <sys/sched/event.hpp>
+#include <ipc/wire.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <frg/hash.hpp>
@@ -22,8 +24,6 @@ namespace tty {
 }
 
 namespace sched {
-    inline volatile size_t uptime;
-
     constexpr size_t WNOHANG = 1;
     constexpr size_t WUNTRACED = 2;
     constexpr size_t WSTOPPED = 2;
@@ -60,7 +60,7 @@ namespace sched {
 
     void init();
 
-    thread *create_thread(void (*main)(), uint64_t rsp, vmm::vmm_ctx *ctx, uint8_t privilege);
+    thread *create_thread(void (*main)(), uint64_t rsp, vmm::vmm_ctx *ctx, uint8_t privilege, bool assign_tid = true);
     process *create_process(char *name, void (*main)(), uint64_t rsp, vmm::vmm_ctx *ctx, uint8_t privilege);
 
     process_group *create_process_group(process *leader);
@@ -71,19 +71,17 @@ namespace sched {
 
     int do_futex(uintptr_t vaddr, int op, int expected, timespec *timeout);    
 
-    process *find_process(pid_t pid);
-
-    int64_t pick_task();
+    frg::tuple<tid_t, thread *> pick_task();
     void swap_task(arch::irq_regs *r);
 
     struct futex {
         util::spinlock lock;
         uint64_t paddr;
-        frg::vector<tid_t, memory::mm::heap_allocator> tids{};        
+        ipc::wire wire;   
 
         int locked;
 
-        futex(uint64_t paddr): lock(), paddr(paddr), tids(), locked(0) {};
+        futex(uint64_t paddr): lock(), paddr(paddr), wire(), locked(0) {};
     };
 
     struct [[gnu::packed]] thread_info {
@@ -128,22 +126,47 @@ namespace sched {
             bool in_syscall;
 
             uint8_t state;
-            int64_t cpu;
+            bool running;
 
+            process *proc;
             tid_t tid;
             pid_t pid;
 
-            process *proc;
-            
-            uint8_t privilege;
-            bool running;
+            ipc::wire wire;
 
-            int64_t start();
-            
+            frg::rbtree_hook hook;
+
+            void start();
             void stop();
             void cont();
 
-            int64_t kill();
+            thread(uintptr_t kstack, uintptr_t ustack,
+                uintptr_t sig_kstack, vmm::vmm_ctx *mem_ctx,
+                void (*main)(), uint64_t rsp, uint8_t privilege,
+                bool assign_tid): ctx(), 
+                sig_ctx(), ucontext(), sig_kstack(sig_kstack),
+                kstack(kstack), ustack(ustack), mem_ctx(mem_ctx),
+                started(0), stopped(0), uptime(0),
+                pending_signal(false), dispatch_ready(false), in_syscall(false),
+                state(BLOCKED), running(false),
+
+                proc(nullptr), pid(-1), wire(), hook() {
+                if (assign_tid) arch::init_thread(this);
+                arch::init_context(this, main, rsp, privilege);
+            }
+
+            thread(thread *original, vmm::vmm_ctx *ctx, arch::irq_regs *r,
+                uintptr_t kstack, uintptr_t sig_kstack):
+                sig_ctx(), sig_kstack(sig_kstack), kstack(kstack), mem_ctx(ctx),
+                started(0), stopped(0), uptime(0),
+                pending_signal(original->pending_signal), dispatch_ready(original->dispatch_ready), in_syscall(original->in_syscall),
+                state(BLOCKED), running(false),
+                
+                proc(nullptr), pid(-1), wire(), hook() { 
+                this->sig_ctx.sigmask = original->sig_ctx.sigmask;
+                arch::init_thread(this);
+                arch::fork_context(original, this, r);
+            }
     };
 
     struct process_env {
@@ -227,7 +250,9 @@ namespace sched {
             ssize_t status;
             process_env env; 
 
-            int64_t start();
+            ipc::wire wire;
+
+            void start();
             void kill(int exit_code = 0);
 
             void suspend();
@@ -237,12 +262,10 @@ namespace sched {
             void add_thread(thread *task);
             void kill_thread(int64_t tid);
             thread *pick_thread(int signum);
-            size_t find_child(process *proc);
-            size_t find_zombie(process *proc);
 
             frg::tuple<int, pid_t> waitpid(pid_t pid, thread *waiter, int options);
 
-            process(): lock(), sig_lock() {};
+            process(): lock(), sig_lock(), wire() {};
     };
 
     class process_group {
@@ -270,12 +293,7 @@ namespace sched {
             }
 
             void remove_process(process *proc) {
-                for (size_t i = 0; i < procs.size(); i++) {
-                    if (procs[i] == proc) {
-                        procs[i] = nullptr;
-                    }
-                }
-
+                procs.erase(proc);
                 process_count--;
             }
     };
@@ -309,22 +327,22 @@ namespace sched {
             }
 
             void remove_group(process_group *group) {
-                for (size_t i = 0; i < groups.size(); i++) {
-                    if (groups[i] == group) {
-                        groups[i] = nullptr;
-                    }
-                }
-
+                groups.erase(group);
                 group_count--;
             }            
     };
 
+    pid_t add_process(sched::process *proc);
+    pid_t add_process_group(sched::process_group *group);
+    pid_t add_session(sched::session *sess);
 
-    inline frg::hash_map<pid_t, sched::process_group *, frg::hash<pid_t>, memory::mm::heap_allocator> process_groups{frg::hash<pid_t>()};
-    inline frg::vector<sched::process *, memory::mm::heap_allocator> processes{};
-    inline frg::vector<sched::thread *, memory::mm::heap_allocator> threads{};
+    void remove_process(pid_t pid);
+    void remove_process_group(pid_t pgid);
+    void remove_session(pid_t sid);
 
-    extern util::spinlock sched_lock;
+    sched::process *get_process(pid_t pid);
+    sched::process_group *get_process_group(pid_t pgid);
+    sched::session *get_session(pid_t sid);
 };
 
 #endif

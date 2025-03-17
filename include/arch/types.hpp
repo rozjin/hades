@@ -42,18 +42,15 @@ namespace arch {
     using irq_ext = void(*)(irq_regs *r, void *aux);
 
     void init_irqs();
-    void init_features();
 
     void irq_on();
     void irq_off();
     void stall_cpu();
     bool get_irq_state();
 
-    size_t alloc_irq();
-
-    size_t install_irq(irq_fn handler);
-    size_t install_irq(irq_ext handler, void *aux);
-
+    size_t alloc_vector();
+    void install_vector(size_t vector, irq_fn handler);
+    void install_vector(size_t vector, irq_ext handler, void *aux = nullptr);
     void route_irq(size_t irq, size_t vector);
 
     void init_context(sched::thread *task, void (*main)(), uint64_t rsp, uint8_t privilege);
@@ -72,24 +69,31 @@ namespace arch {
 
     void init_sched();
     void tick();
-    void init_smp();
-    void start_bsp();
-
-    void stop_thread(sched::thread *task);
     void stop_all_cpus();
 
     int do_futex(uintptr_t vaddr, int op, int expected, sched::timespec *timeout);
 
-    sched::process *get_process();
-    sched::thread *get_thread();
-
     void set_process(sched::process *process);
     void set_thread(sched::thread *task);
 
+    void init_thread(sched::thread *task);
+    void start_thread(sched::thread *task);
+    void stop_thread(sched::thread *task);
+    void kill_thread(sched::thread *task);
+
+    tid_t get_idle_tid();
+    sched::thread *get_idle();
+
+    sched::process *get_process();
+    sched::thread *get_thread();
+
     tid_t get_tid();
-    tid_t get_idle();
     pid_t get_pid();
+
     uint64_t get_cpu();
+
+    pid_t allocate_pid();
+    tid_t allocate_tid();
 
     void set_errno(int errno);
     int get_errno();
@@ -103,7 +107,7 @@ namespace arch {
         void load_params(char **argv, char** envp, sched::process_env *env);
     }
 
-    void add_timer(sched::timer *timer);
+    void add_timer(sched::timer timer);
     void tick_clock(long nanos);
 };
 

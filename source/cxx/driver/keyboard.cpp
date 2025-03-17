@@ -2,11 +2,13 @@
 #include "arch/types.hpp"
 #include "arch/x86/types.hpp"
 #include "driver/tty/tty.hpp"
-#include "sys/sched/event.hpp"
+#include "ipc/evtable.hpp"
 #include "util/io.hpp"
 #include "util/lock.hpp"
 #include <cstddef>
 #include <cstdint>
+
+ipc::wire kb::wire{};
 
 static bool is_shift;
 static bool is_shift_locked;
@@ -216,7 +218,7 @@ void kb::irq_handler(arch::irq_regs *r) {
         }
 
         notify_kbd:
-            ipc::send(KBD_PRESS);
+            kb::wire.arise(evtable::KB_PRESS);
     }
 }
 
@@ -224,7 +226,8 @@ void kb::init() {
     disable();
     flush();
 
-    size_t vector = arch::install_irq(irq_handler);
+    size_t vector = arch::alloc_vector();
+    arch::install_vector(vector, irq_handler);
     arch::route_irq(2, vector);
 
     enable();

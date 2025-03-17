@@ -139,6 +139,24 @@ using unique_ptr = frg::unique_ptr<T, memory::mm::heap_allocator>;
 template <typename T>
 using shared_ptr = smarter::shared_ptr<T>;
 
+template<typename  T>
+using weak_ptr = smarter::weak_ptr<T>;
+
 constexpr char alpha_lower[] = "abcdefghijklmnopqrstuvwxyz";
+
+struct function_t {
+    template<class...Ts>
+    constexpr void operator()(Ts&&...) const {}
+    
+    explicit constexpr operator bool() const { return false; }
+    constexpr function_t() {}
+
+    friend constexpr bool operator==(::std::nullptr_t, function_t ) { return true; }
+    friend constexpr bool operator==(function_t, ::std::nullptr_t ) { return true; }
+    friend constexpr bool operator!=(::std::nullptr_t, function_t ) { return false; }
+    friend constexpr bool operator!=(function_t, ::std::nullptr_t ) { return false; }
+};
+
+constexpr function_t function{};
 
 #endif

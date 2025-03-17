@@ -3,8 +3,6 @@
 
 #include <cstddef>
 
-// match_data is bus-specific
-
 namespace dtable {
     namespace majors {
         constexpr size_t PCI = 175;

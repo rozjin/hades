@@ -73,9 +73,9 @@ bool init_symbols(elf::file *file) {
 bool elf::file::init(vfs::fd *fd) {
     this->fd = fd;
 
-    elf64_hdr *hdr = (elf64_hdr *) kmalloc(1024);
-    auto res = vfs::read(fd, hdr, 1024);
-    if (res != 1024) {
+    elf64_hdr *hdr = (elf64_hdr *) kmalloc(64);
+    auto res = vfs::read(fd, hdr, 64);
+    if (res != 64) {
         kfree(hdr);
         return false;
     }

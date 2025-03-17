@@ -105,6 +105,10 @@ namespace arch {
 
         alignas(16)
         char sse_region[512];
+
+
+        uint8_t privilege;
+        int cpu;
     };
 
     using entry_trampoline = uint64_t;
@@ -149,15 +153,10 @@ namespace x86 {
         void *aux;
     };
 
+    size_t alloc_vector();
+    void install_vector(size_t vector, irq_fn handler);
+    void install_vector(size_t vector, irq_ext handler, void *aux = nullptr);
     void route_irq(size_t irq, size_t vector);
-
-    void install_irq(size_t irq, irq_fn handler);
-    void install_irq(size_t irq, irq_ext handler, void *aux =  nullptr);
-
-    size_t alloc_irq();
-
-    size_t install_irq(irq_fn handler);
-    size_t install_irq(irq_ext handler, void *aux);
 
     void set_gate(uint8_t num, uint64_t base, uint8_t flags);
     void set_ist(uint8_t num, uint8_t idx);
@@ -184,7 +183,11 @@ namespace x86 {
     bool handle_user_exception(arch::irq_regs *r);
     bool handle_pf(arch::irq_regs *r);
     void cleanup_vmm_ctx(sched::process *process);
+    
+    void init_thread(sched::thread *task);
+    void start_thread(sched::thread *task);
     void stop_thread(sched::thread *task);
+    void kill_thread(sched::thread *task);
 
     ssize_t do_futex(uintptr_t vaddr, int op, int expected, sched::timespec *timeout);
 

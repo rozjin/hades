@@ -145,6 +145,8 @@ namespace e1000 {
 
             vfs::devfs::bus_space *flash_space;
             vfs::devfs::bus_space *reg_space;
+
+            size_t irq_vector;
     
             bus_handle_t flash_handle;
             bus_handle_t reg_handle;
@@ -188,6 +190,8 @@ namespace e1000 {
             uint32_t route(uint32_t dest) override;
             void send(const void *buf, size_t len) override;
 
+            size_t get_vector();
+
             device(vfs::devfs::busdev *bus, ssize_t major, ssize_t minor, void *aux):
                 vfs::devfs::device(bus, major, minor, aux, vfs::devfs::device_class::OTHER), net::device(),
                 rx_desc_dma(),
@@ -199,6 +203,8 @@ namespace e1000 {
 
                 is_e1000e = args->flags;
                 has_eeprom = false;
+
+                irq_vector = args->irq;
 
                 flash_space = args->flash_space;
                 reg_space = args->reg_space;

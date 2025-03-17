@@ -64,27 +64,45 @@ void arch::init_irqs() {
     x86::hook_irqs();
 }
 
-void arch::route_irq(size_t irq, size_t vector) {
-    x86::route_irq(irq, vector);
-}
-
-size_t arch::alloc_irq() {
-    return x86::alloc_irq();
-}
-
-size_t arch::install_irq(irq_fn handler) {
-    return x86::install_irq(handler);
-}
-
-size_t arch::install_irq(irq_ext handler, void *aux) {
-    return x86::install_irq(handler, aux);
-}
-
-size_t last_handler = 1;
+size_t last_handler = x86::IRQ0;
 x86::irq_handler handlers[224] = {};
 
 x86::irq_ptr x86_ptr = {};
 x86::irq_entry x86_entries[256] = { { 0 } };
+
+void arch::route_irq(size_t irq, size_t vector) {
+    x86::route_irq(irq, vector);
+}
+
+size_t arch::alloc_vector() {
+    return x86::alloc_vector();
+}
+
+void arch::install_vector(size_t vector, irq_fn handler) {
+    x86::install_vector(vector, handler);
+}
+
+void arch::install_vector(size_t vector, irq_ext handler, void *aux) {
+    x86::install_vector(vector, handler, aux);
+}
+
+void x86::route_irq(size_t irq, size_t vector) {
+    apic::ioapic::route(apic::lapic::id(), irq, vector, 0);
+}
+
+size_t x86::alloc_vector() {
+    size_t idx = last_handler++;
+    return idx;
+}
+
+void x86::install_vector(size_t vector, irq_fn handler) {
+    handlers[vector].fn.reg = handler;
+}
+
+void x86::install_vector(size_t vector, irq_ext handler, void *aux) {
+    handlers[vector].fn.ext = handler;
+    handlers[vector].aux = aux;
+}
 
 static log::subsystem logger = log::make_subsystem("IRQ");
 void trace(arch::irq_regs *r) {
@@ -200,16 +218,19 @@ extern "C" {
 
                 task->proc->kill(255);
 
+                arch::set_process(nullptr);
+                arch::set_thread(arch::get_idle());
+            
                 sched::swap_task(r);
                 goto end_isr;
             }
         }
 
-        if (handlers[r->int_no - x86::IRQ0].fn.reg || handlers[r->int_no - x86::IRQ0].fn.ext) {
-            if (handlers[r->int_no - x86::IRQ0].aux) {
-                handlers[r->int_no - x86::IRQ0].fn.ext(r, handlers[r->int_no - x86::IRQ0].aux);
+        if (handlers[r->int_no].fn.reg || handlers[r->int_no].fn.ext) {
+            if (handlers[r->int_no].aux) {
+                handlers[r->int_no].fn.ext(r, handlers[r->int_no].aux);
             } else {
-                handlers[r->int_no - x86::IRQ0].fn.reg(r);
+                handlers[r->int_no].fn.reg(r);
             }
         }
 
@@ -236,40 +257,6 @@ void x86::set_gate(uint8_t num, uint64_t base, uint8_t flags) {
 
 void x86::set_ist(uint8_t num, uint8_t idx) {
     x86_entries[num].ist = (idx & 0b111);
-}
-
-void x86::route_irq(size_t irq, size_t vector) {
-    apic::ioapic::route(apic::lapic::id(), irq, vector + x86::IRQ0, 0);
-}
-
-size_t x86::alloc_irq() {
-    size_t idx = last_handler++;
-    return idx;
-}
-
-
-size_t x86::install_irq(irq_fn handler) {
-    size_t idx = last_handler++;
-    handlers[idx].fn.reg = handler;
-
-    return idx;
-}
-
-size_t x86::install_irq(irq_ext handler, void *aux) {
-    size_t idx = last_handler++;
-    handlers[idx].fn.ext = handler;
-    handlers[idx].aux = aux;
-    
-    return idx;
-}
-
-void x86::install_irq(size_t irq, irq_fn handler) {
-    handlers[irq].fn.reg = handler;
-}
-
-void x86::install_irq(size_t irq, irq_ext handler, void *aux) {
-    handlers[irq].fn.ext = handler;
-    handlers[irq].aux = aux;
 }
 
 void x86::irq_on() {

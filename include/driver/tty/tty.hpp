@@ -3,7 +3,6 @@
 
 #include "driver/tty/termios.hpp"
 #include "fs/vfs.hpp"
-#include "sys/sched/event.hpp"
 #include "util/lock.hpp"
 #include "util/ring.hpp"
 #include <cstddef>

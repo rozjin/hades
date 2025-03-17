@@ -2,6 +2,7 @@
 #define NET_DEVICE_HPP
 
 #include "fs/dev.hpp"
+#include "ipc/wire.hpp"
 #include "util/types.hpp"
 #include <frg/hash_map.hpp>
 #include <frg/rcu_radixtree.hpp>
@@ -21,7 +22,7 @@ namespace net {
             frg::hash_map<uint32_t, uint8_t *, frg::hash<uint32_t>, memory::mm::heap_allocator> arp_table;
             frg::vector<net::route, memory::mm::heap_allocator> ipv4_routing_table;
 
-            frg::hash_map<uint32_t, frg::vector<tid_t, memory::mm::heap_allocator>, 
+            frg::hash_map<uint32_t, ipc::wire, 
                 frg::hash<uint32_t>,  memory::mm::heap_allocator> pending_arps;
 
             // TODO: IP Fragmemtation

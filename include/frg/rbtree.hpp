@@ -117,15 +117,6 @@ public:
 		return current;
 	}
 
-	T *last() {
-		T *current = get_root();
-		if(!current)
-			return nullptr;
-		while(get_right(current))
-			current = get_right(current);
-		return current;
-	}
-
 	// ------------------------------------------------------------------------
 	// Insertion functions.
 	// ------------------------------------------------------------------------

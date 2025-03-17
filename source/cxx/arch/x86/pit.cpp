@@ -28,7 +28,8 @@ void pit::init() {
     io::writeb(0x40, divisor & 0xFF);
     io::writeb(0x40, divisor >> 8 & 0xFF);
 
-    size_t vector = arch::install_irq(pit_tick_handler);
+    size_t vector = arch::alloc_vector();
+    arch::install_vector(vector, pit_tick_handler);
     arch::route_irq(0, vector);
 
     sched::clock_mono = { .tv_sec = 0, .tv_nsec = 0 };

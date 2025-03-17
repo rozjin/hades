@@ -1,9 +1,8 @@
 #include "arch/types.hpp"
 #include "driver/net/device.hpp"
+#include "ipc/evtable.hpp"
 #include "mm/mm.hpp"
-#include "sys/sched/event.hpp"
 #include "sys/sched/time.hpp"
-#include "sys/sched/event.hpp"
 #include "util/types.hpp"
 #include <cstdint>
 #include <driver/net/protos.hpp>
@@ -84,9 +83,7 @@ void net::arp::arp_handle(net::device *dev, void *pkt) {
             memcpy(arp_mac, src_mac, net::eth_alen);
 
             dev->arp_table.insert(src_ip, arp_mac);
-            for (auto tid: dev->pending_arps[src_ip]) {
-                ipc::send({tid}, ARP_FOUND);
-            }
+            dev->pending_arps[src_ip].arise(evtable::ARP_FIN);
 
             dev->pending_arps.remove(src_ip);
 
@@ -140,9 +137,8 @@ void net::arp::arp_probe(net::device *dev, uint32_t ip) {
 void net::arp::arp_wait(net::device *dev, uint32_t ip) {
     auto timeout = sched::timespec::ms(30000);
     if (!dev->pending_arps.contains(ip)) {
-        dev->pending_arps.insert(ip, frg::vector<tid_t, memory::mm::heap_allocator>());
+        dev->pending_arps.insert(ip, ipc::wire());
     } 
 
-    dev->pending_arps[ip].push(arch::get_tid());
-    ipc::receive({ ARP_FOUND }, false, &timeout);
+    dev->pending_arps[ip].wait(evtable::ARP_FIN, true, &timeout);
 }

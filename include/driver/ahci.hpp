@@ -8,7 +8,6 @@
 #include <cstdint>
 #include <frg/vector.hpp>
 #include <fs/dev.hpp>
-#include <sys/sched/event.hpp>
 #include <util/lock.hpp>
 
 namespace ahci {

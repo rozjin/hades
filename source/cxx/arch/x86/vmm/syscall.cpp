@@ -1,3 +1,4 @@
+#include "mm/common.hpp"
 #include "util/lock.hpp"
 #include <arch/vmm.hpp>
 #include <arch/x86/types.hpp>
@@ -59,7 +60,7 @@ void syscall_mmap(arch::irq_regs *r) {
     int flags = r->r10;
     int fd = r->r8;
     size_t offset = r->r9;
-    size_t pages = util::ceil(len, memory::page_size) * memory::page_size;
+    size_t pages = util::align(len, memory::page_size);
 
     if (pages == 0 || pages % memory::page_size != 0) {
         arch::set_errno(EINVAL);
@@ -109,7 +110,7 @@ void syscall_munmap(arch::irq_regs *r) {
 
     void *addr = (void *) r->rdi;
     size_t len = r->rsi;
-    size_t pages = util::ceil(len, memory::page_size) * memory::page_size;
+    size_t pages = util::align(len, memory::page_size);
 
     if (pages == 0 || pages % memory::page_size != 0) {
         arch::set_errno(EINVAL);
@@ -142,7 +143,7 @@ void syscall_mprotect(arch::irq_regs *r) {
     size_t len = r->rsi;
     int prot = r->rdx;
 
-    size_t pages = util::ceil(len, memory::page_size) * memory::page_size;
+    size_t pages = util::align(len, memory::page_size);
 
     if (pages == 0 || pages % memory::page_size != 0) {
         arch::set_errno(EINVAL);

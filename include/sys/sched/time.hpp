@@ -6,7 +6,13 @@
 #include <cstddef>
 #include <util/types.hpp>
 
+namespace ipc {
+    struct wire;
+}
+
 namespace sched {    
+    class thread;
+
     constexpr long NANOS_PER_MILLI = 1000000000;
 
     constexpr size_t CLOCK_REALTIME = 0;
@@ -60,13 +66,13 @@ namespace sched {
 
     struct timer {
         timespec spec;
-        tid_t tid;
+        ipc::wire *wire;
     };
 
     extern timespec clock_rt;
     extern timespec clock_mono;
 
-    extern frg::vector<sched::timer *, memory::mm::heap_allocator> timers;
+    extern frg::vector<sched::timer, memory::mm::heap_allocator> timers;
 }
 
 #endif

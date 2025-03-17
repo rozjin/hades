@@ -984,7 +984,7 @@ ssize_t vfs::unlink(node *base, frg::string_view filepath) {
             auto child = node->parent->children[i];
             if (child == nullptr) continue;
             if (child->name == node->name) {
-                node->parent->children[i] = nullptr;
+                node->parent->children.erase(child);
                 break;
             }
         }

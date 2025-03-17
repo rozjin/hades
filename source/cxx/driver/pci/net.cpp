@@ -1,4 +1,5 @@
 #include "acpispec/resources.h"
+#include "arch/types.hpp"
 #include "driver/bus/pci.hpp"
 #include "driver/dtable.hpp"
 #include "driver/net/e1000.hpp"
@@ -31,7 +32,7 @@ vfs::devfs::device
                     pci_device->enable_busmastering();
                     if (is_mmio) pci_device->enable_mmio();
 
-                    size_t vector = arch::alloc_irq();
+                    size_t vector = arch::alloc_vector();
 
                     // bar = frg::construct<pci_space>(memory::mm::heap, pci_bar.base, pci_bar.size, pci_bar.is_mmio)
                     ::net::setup_args args {
@@ -55,6 +56,8 @@ vfs::devfs::device
             break;
         }
     }
+
+    return nullptr;
 }
 
 void pci::net::matcher::attach(vfs::devfs::busdev *bus, vfs::devfs::device *dev, void *aux) {
@@ -69,8 +72,10 @@ void pci::net::matcher::attach(vfs::devfs::busdev *bus, vfs::devfs::device *dev,
                 break;
             }
 
-            size_t vector = arch::install_irq(e1000::irq_handler, e1000_dev);
-            arch::route_irq(irq_resource.base, vector);
+            arch::install_vector(e1000_dev->get_vector(), e1000::irq_handler, e1000_dev);
+            arch::route_irq(irq_resource.base, e1000_dev->get_vector());
+
+            e1000_dev->init_routing();
         }
     }
 }

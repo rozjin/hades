@@ -9,7 +9,6 @@
 #include "lai/core.h"
 #include "lai/helpers/sci.h"
 #include "mm/common.hpp"
-#include "sys/sched/event.hpp"
 #include "sys/sched/signal.hpp"
 #include "util/types.hpp"
 #include <cstddef>
@@ -49,14 +48,8 @@ static void run_init() {
         "/bin/init", 
         NULL 
     };
-    char *envp[] = { 
-        (char *) "HOME=/home/zag", 
-        (char *) "PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin", 
-        (char *) "TERM=linux", 
-        (char *) "FBDEV=/dev/fb0", 
-        NULL 
-    };
-    proc->cwd = vfs::resolve_at("/home/zag", nullptr);
+
+    proc->cwd = vfs::resolve_at("/", nullptr);
 
     auto fd = vfs::open(nullptr, "/bin/init", proc->fds, 0, O_RDWR, 0, 0);
     proc->mem_ctx->swap_in();
@@ -64,8 +57,8 @@ static void run_init() {
     proc->env.load_elf("/bin/init", fd);
     proc->env.set_entry();
 
-    proc->env.load_params(argv, envp);
-    proc->env.place_params(envp, argv, proc->main_thread);
+    proc->env.load_params(argv, nullptr);
+    proc->env.place_params(nullptr, argv, proc->main_thread);
 
     kmsg(logger, "Trying to run init process, at: %lx", proc->env.entry);
     proc->start();
@@ -151,13 +144,11 @@ extern "C" {
 
         sched::init();
 
-        arch::init_smp();
-        arch::start_bsp();
-
         auto kern_thread = sched::create_thread(kern_task, (uint64_t) pmm::stack(4), vmm::boot, 0);
+        kmsg(logger, "Kern thread tid: %d", kern_thread->tid);
+
         kern_thread->start();
         
-        arch::irq_on();
         while (true) {
             asm volatile("pause");
         }

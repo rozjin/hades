@@ -114,7 +114,15 @@
             "tlsf.hpp": "c",
             "stdbool.h": "c",
             "string.hpp": "c",
-            "stddef.h": "c"
+            "stddef.h": "c",
+            "cfenv": "cpp",
+            "codecvt": "cpp",
+            "coroutine": "cpp",
+            "set": "cpp",
+            "contract": "cpp",
+            "ratio": "cpp",
+            "iostream": "cpp",
+            "cinttypes": "cpp"
         },
         "C_Cpp.default.compileCommands": "/home/racemus/projects/hades/build/compile_commands.json",
         "C_Cpp.default.configurationProvider": "mesonbuild.mesonbuild"

@@ -18,7 +18,6 @@
     pathlist lsdir(frg::string_view dirpath);
  */
 
-#include "sys/sched/event.hpp"
 #include "sys/sched/time.hpp"
 #include "util/lock.hpp"
 #include <util/types.hpp>
@@ -199,6 +198,7 @@ void syscall_openat(arch::irq_regs *r) {
 
     auto fd = vfs::open(base, path, process->fds, flags, mode, process->effective_uid, process->effective_gid);
     if (fd == nullptr) {
+        arch::set_errno(ENOENT);
         r->rax = -1;
         return;
     }
@@ -578,7 +578,7 @@ void syscall_renameat(arch::irq_regs *r) {
 
     auto src = resolve_at(old_path, old_base);
     if (!src) {
-        arch::set_errno(EACCES);
+        arch::set_errno(ENOENT);
         r->rax = -1;
         return;
     }

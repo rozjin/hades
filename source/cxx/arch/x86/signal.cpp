@@ -1,3 +1,4 @@
+#include "ipc/evtable.hpp"
 #include "mm/common.hpp"
 #include "util/lock.hpp"
 #include <arch/x86/smp.hpp>
@@ -27,6 +28,7 @@ void x86::sigreturn_default(sched::process *proc, sched::thread *task) {
     util::lock_guard ctx_guard{ctx->lock};
 
     ctx->sigdelivered |= SIGMASK(task->ucontext.signum);
+    ctx->wire.arise(evtable::SIGNAL);
 
     ctx_guard.~lock_guard();
 

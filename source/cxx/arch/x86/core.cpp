@@ -38,11 +38,6 @@ void io::wait() {
     io::writeb(0x80, 0x0);
 }
 
-void arch::init_features() {
-    apic::init();
-    hpet::init();
-}
-
 arch::irq_regs arch::sched_to_irq(sched_regs *regs) {
     return x86::sched_to_irq(regs);
 }

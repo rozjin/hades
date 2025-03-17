@@ -2,11 +2,11 @@
 #include "arch/x86/smp.hpp"
 #include "arch/x86/types.hpp"
 #include "fs/vfs.hpp"
+#include "ipc/evtable.hpp"
 #include "mm/common.hpp"
 #include "mm/mm.hpp"
 #include "mm/pmm.hpp"
 #include "mm/vmm.hpp"
-#include "sys/sched/event.hpp"
 #include "util/lock.hpp"
 #include <cstddef>
 #include <cstdint>
@@ -89,7 +89,7 @@ int sched::signal::do_kill(pid_t pid, int sig) {
 
     auto sender = arch::get_process();
     if (pid > 0) {
-        process *target = processes[pid];
+        process *target = sched::get_process(pid);
         if (!target) {
             // TODO: esrch
             arch::set_errno(EINVAL);
@@ -102,10 +102,6 @@ int sched::signal::do_kill(pid_t pid, int sig) {
     } else {
         auto session = sender->sess;
         auto group = session->groups[pid];
-        if (group == nullptr) {
-            arch::set_errno(ESRCH);
-            return -1;
-        }
 
         for (size_t i = 0; i < group->procs.size(); i++) {
             auto target = group->procs[i];
@@ -137,8 +133,8 @@ int sched::signal::wait_signal(thread *task, sigset_t sigmask, sched::timespec *
             }
         }
 
-        auto [evt, _] = ipc::receive({ SIGNAL }, true, time);
-        if (evt < 0) {
+        auto [evt, _] = ctx->wire.wait(evtable::SIGNAL, true, time);
+        if (evt > 0) {
             return -1;
         }
     }
@@ -199,8 +195,6 @@ bool sched::signal::send_process(process *sender, process *target, int sig) {
 
 bool sched::signal::send_group(process *sender, process_group *target, int sig) {
     for (size_t i = 0; i < target->procs.size(); i++) {
-        if (target->procs[i] == nullptr) continue;
-
         auto proc = target->procs[i];
         send_process(sender, proc, sig);
     }

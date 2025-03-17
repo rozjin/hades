@@ -6,6 +6,7 @@
 #include "mm/mm.hpp"
 #include "util/log/log.hpp"
 #include "util/log/panic.hpp"
+#include "util/misc.hpp"
 #include "util/types.hpp"
 #include <cstddef>
 #include <frg/allocation.hpp>
@@ -133,7 +134,7 @@ void vfs::devfs::remove_device(device *dev, ssize_t major) {
     if (device_map.contains(major)) {
         for (size_t i = 0; i < device_map[major].list.size(); i++) {
             if (device_map[major].list[i] == dev) {
-                device_map[major].list[i] = 0;
+                device_map[major].list.erase(dev);
                 if (dev->minor < device_map[major].last_index) {
                     device_map[major].last_index = dev->minor;
                 }
@@ -195,32 +196,7 @@ ssize_t vfs::devfs::read(node *file, void *buf, size_t len, off_t offset) {
         }
 
         auto cache = blockdev->disk_cache;
-
-        size_t page_offset = offset & ~(0xFFF);
-        size_t start_offset = offset & 0xFFF;
-        void *page = cache->read_page(page_offset);
-
-        if (len <= memory::page_size - start_offset) {
-            memcpy(buf, (char *) page + start_offset, len);
-            return len;
-        } else {
-            memcpy(buf, (char *) page  + start_offset, memory::page_size - start_offset);
-        }
-
-        page_offset = offset / memory::page_size;
-        auto page_count = len / memory::page_size;
-        for (size_t i = 1; i < page_count; i++) {
-            page = cache->read_page((page_offset + i) * memory::page_size);
-            memcpy((char *) buf + (i * memory::page_size), page, memory::page_size);
-        }
-
-        auto end_offset = len % memory::page_size;
-        page_offset = (offset + len) / memory::page_size;
-        if (page_count && end_offset) {
-            page = cache->read_page(page_offset * memory::page_size);
-            memcpy((char *) buf + (page_count * memory::page_size), page, end_offset);            
-        }
-
+        cache->request_io(buf, offset, len, false);
         return len;
     }
 
@@ -240,30 +216,10 @@ ssize_t vfs::devfs::write(node *file, void *buf, size_t len, off_t offset) {
         if (private_data->part >= 0) {
             auto part = blockdev->part_list.data()[private_data->part];
             offset = offset + (part.begin * blockdev->block_size);
-//            return device->read(buf, len, offset + (part.begin * blockdev->block_size));
         }
 
         auto cache = blockdev->disk_cache;
-
-        size_t page_offset = offset & ~(0xFFF);
-        size_t start_offset = offset & 0xFFF;
-        
-        void *page = cache->write_page(page_offset);
-        memcpy((char *) page + start_offset, buf, len);
-
-        page_offset = (offset / memory::page_size) + 1;
-        auto page_count = (len / memory::page_size);
-        for (size_t i = 1; i < page_count; i++) {
-            page = cache->write_page((page_offset + i) * memory::page_size);
-            memcpy(page, (char *) buf + (i * memory::page_size), memory::page_size);
-        }
-
-        auto end_offset = len % memory::page_size;
-        if (page_count && end_offset) {
-            page = cache->write_page(offset + len);
-            memcpy(page, (char *) buf + (page_count * memory::page_size), end_offset);            
-        }
-
+        cache->request_io(buf, offset, len, true);
         return len;
     }
 

@@ -4,7 +4,7 @@
 #include <arch/x86/types.hpp>
 #include <cstddef>
 #include <cstdint>
-#include <sys/sched/event.hpp>
+#include <ipc/wire.hpp>
 #include <sys/sched/time.hpp>
 #include <util/types.hpp>
 #include <arch/types.hpp>
@@ -134,7 +134,21 @@ namespace sched {
             sigset_t sigpending;
             sigset_t sigdelivered;
 
+            ipc::wire wire;
+
             util::spinlock lock;
+
+            thread_ctx(): sigmask(0), queue(),
+                sigpending(0), sigdelivered(0), 
+                wire(), lock() {}
+
+            thread_ctx(thread_ctx&& other): sigmask(std::move(other.sigmask)),
+                sigpending(std::move(other.sigpending)), sigdelivered(std::move(other.sigdelivered)), 
+                wire(), lock() {
+                for(size_t i = 0; i < SIGNAL_MAX; i++) {
+                    queue[i] = std::move(other.queue[i]);
+                }
+            }
         };
 
         int do_sigaction(process *proc, thread *task, int sig, sigaction *act, sigaction *old);

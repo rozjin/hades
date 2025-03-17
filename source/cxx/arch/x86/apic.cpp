@@ -94,29 +94,17 @@ namespace apic {
 
     void remap() {
         io::writeb(0x20, 0x11);
-        io::wait();
         io::writeb(0xA0, 0x11);
-        io::wait();
 
         io::writeb(0x21, 0x20);
-        io::wait();
         io::writeb(0xA1, 0x28);
-        io::wait();
 
         io::writeb(0x21, 0x4);
-        io::wait();
         io::writeb(0xA1, 0x2);
-        io::wait();
 
         io::writeb(0x21, 0x1);
-        io::wait();
         io::writeb(0xA1, 0x1);
-        io::wait();
 
-        io::writeb(0x21, 0);
-        io::wait();
-        io::writeb(0xA1, 0);
-        io::wait();
         io::writeb(0xA1, 0xFF);
         io::writeb(0x21, 0xFF);
     };

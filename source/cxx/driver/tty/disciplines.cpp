@@ -1,5 +1,6 @@
 #include "arch/types.hpp"
-#include "sys/sched/event.hpp"
+#include "driver/keyboard.hpp"
+#include "ipc/evtable.hpp"
 #include "sys/sched/sched.hpp"
 #include "util/lock.hpp"
 #include <arch/x86/types.hpp>
@@ -106,8 +107,8 @@ ssize_t tty::device::read_canon(void *buf, size_t len) {
             for (;;) {
                 if (__atomic_load_n(&in.items, __ATOMIC_RELAXED) > 0) break; 
 
-                auto [evt, _] = ipc::receive({ KBD_PRESS }, true);
-                if (!evt) {
+                auto [evt, _] = kb::wire.wait(evtable::KB_PRESS, true);
+                if (evt < 0) {
                     kfree(chars);
                     return -1;
                 }
@@ -206,8 +207,8 @@ ssize_t tty::device::read_raw(void *buf, size_t len) {
         for (;;) {
             if (__atomic_load_n(&in.items, __ATOMIC_RELAXED) >= min) break; 
 
-            auto [evt, _] = ipc::receive({ KBD_PRESS }, true);
-            if (!evt) {
+            auto [evt, _] = kb::wire.wait(evtable::KB_PRESS, true);
+            if (evt < 0) {
                 kfree(chars);
                 return -1;
             }

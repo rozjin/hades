@@ -1,0 +1,46 @@
+%import common.ESCAPED_STRING   -> STRING
+%import common.SIGNED_NUMBER    -> NUMBER
+%import common.HEXDIGIT
+%import common.CNAME -> NAME
+
+%import common.CPP_COMMENT
+%import common.C_COMMENT
+%ignore CPP_COMMENT
+%ignore C_COMMENT
+
+%import common.WS
+%ignore WS
+
+HEX_NUMBER: "0x" HEXDIGIT+
+BIN_NUMBER: "0b" ("0" | "1")*
+TYPE: "string"
+            | "u8" | "u16" | "u32" | "u64"
+            | "i8" | "i16" | "i32" | "i64"
+            | "size_t" | "ssize_t"
+            | "blob" | "void" | "ptr"
+
+number: NUMBER | HEX_NUMBER | BIN_NUMBER
+string: STRING
+bool: "true" | "false"
+
+identifier: NAME
+value: string
+               | number
+               | bool
+
+message_argument: identifier ":" type
+message_arguments: "(" [message_argument ("," message_argument)*] ")"
+
+message_async: "async"
+message_return: "=>" type
+
+message: [message_async] identifier message_arguments message_return
+
+type: TYPE
+
+interface_start: "interface"
+interface_body: "{" message* "}"
+
+interface: interface_start identifier interface_body
+
+start: interface

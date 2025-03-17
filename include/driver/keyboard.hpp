@@ -1,6 +1,7 @@
 #ifndef KB_HPP
 #define KB_HPP
 
+#include "ipc/wire.hpp"
 #include <arch/x86/types.hpp>
 #include <fs/dev.hpp>
 #include <cstdint>
@@ -12,6 +13,8 @@ namespace kb {
 
     void init();
     void irq_handler(arch::irq_regs *r);
+
+    extern ipc::wire wire;
 
     struct matcher: vfs::devfs::matcher {
         matcher(): vfs::devfs::matcher(false, false,

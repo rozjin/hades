@@ -15,7 +15,6 @@ namespace util {
         return ceil(a, b) * b;
     }
 
-
     inline size_t max(size_t a, void *b) {
         return std::max(a, (size_t) b);
     }
@@ -34,6 +33,15 @@ namespace util {
 
     inline size_t within(size_t x, void *min, void *max) {
         return within(x, (size_t) min, (size_t) max);
+    }
+
+    template <typename T>
+    bool within(std::initializer_list<T> list, T value) {
+        for (auto it = list.begin(); it != list.end(); ++it) {
+            if (*it == value) return true;
+        }        
+
+        return false;
     }
 
     template <typename T>

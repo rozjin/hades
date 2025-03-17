@@ -122,9 +122,9 @@ void panic(const char *fmt, ...) {
     arch::irq_off();
     arch::stop_all_cpus();
     
-    cache::halt_sync();
     util::lock_guard guard{log_lock};
 
+    cache::halt_sync();
     npf_pprintf(&write_log, nullptr, "[PANIC]: Not syncing");
 
     va_list args;

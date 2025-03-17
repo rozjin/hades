@@ -80,6 +80,10 @@ public:
 		return iterator{ptr};
 	}
 
+    borrow_pointer next(owner_pointer before) {
+        return h(before).next;
+    }
+
 	constexpr intrusive_list()
 	: _front{nullptr}, _back{nullptr} { }
 
@@ -225,6 +229,14 @@ public:
 	iterator end() {
 		return iterator{nullptr};
 	}
+
+    bool contains(owner_pointer element) {
+        for (auto iter = begin(); iter != end(); ++iter) {
+            if (*iter == element) return true;
+        }
+
+        return false;
+    }
 
 private:
 	owner_pointer _front;

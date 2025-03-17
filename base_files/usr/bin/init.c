@@ -184,8 +184,6 @@ static void launch_shell() {
         setuid(1000);
         setgid(1000);
 
-        chdir(getenv("HOME"));
-
 		int stdin = open("/dev/tty0", O_RDONLY);
 		int stdout = open("/dev/tty0", O_WRONLY);
 		int stderr = open("/dev/tty0", O_WRONLY);

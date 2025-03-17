@@ -1,0 +1,20 @@
+template<typename... Args>
+@@RETURN_TYPE@@operator()(Args &&... args) {
+    send_arguments send_args{std::forward<Args>(args)...};
+    
+    ipc::header header{id, sizeof(send_arguments), &send_args};
+    size_t id = interf->port->getTxnTx()->send(&header);
+
+    @@RETURN_STATEMENT@@
+}
+
+void onRx(size_t id, void *payload, size_t len) {
+    if (len < sizeof(send_arguments)) {
+        ipc::header header{empty::id, sizeof(empty), nullptr};
+        interf->port->getRcvTx()->send(&header, id);
+    }
+
+    send_arguments *send_args = (send_arguments *) payload;
+    canceller<@@interfname@@> do_cancel{interf, id};
+    @@REPLY_STATEMENT@@
+}

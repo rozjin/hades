@@ -264,7 +264,6 @@ struct shared_ptr : ptr_access_crtp<T, shared_ptr<T, H>> {
 		return _object;
 	}
 
-
 	void release() {
 		_object = nullptr;
 		_ctr = nullptr;

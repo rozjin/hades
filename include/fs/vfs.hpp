@@ -10,7 +10,6 @@
 #include <frg/vector.hpp>
 #include <mm/mm.hpp>
 #include <sys/sched/time.hpp>
-#include <sys/sched/event.hpp>
 #include <util/lock.hpp>
 #include <util/log/log.hpp>
 #include <util/types.hpp>
@@ -196,12 +195,17 @@ namespace vfs {
             util::spinlock lock;
     };
 
+    struct fd;
+    struct fd_table;
+
     class filesystem {
         public:
             node *root;
             node *source;
             nodelist nodes;
             path relpath;
+
+            frg::vector<fd *, memory::mm::heap_allocator> open_fds;
 
             filesystem() {}
 
@@ -308,8 +312,6 @@ namespace vfs {
         bool data_written;
     };
 
-    struct fd;
-    struct fd_table;
     using fd_pair = frg::tuple<vfs::fd *, vfs::fd *>;
 
     struct fd {

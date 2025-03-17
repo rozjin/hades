@@ -102,7 +102,7 @@ void pci::ahcibus::enumerate() {
     }
 
     volatile ::ahci::abar *ahci_bar = memory::add_virt((::ahci::abar *) pci_bar.base);
-    kmsg(logger, "ABAR Base: ", ahci_bar);
+    kmsg(logger, "ABAR Base: %x", ahci_bar);
 
     ahci_bar->ghc |= (1 << 31);
     get_ownership(ahci_bar);
