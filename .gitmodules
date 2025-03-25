@@ -2,5 +2,5 @@
 	path = subprojects/lai
 	url = https://github.com/managarm/lai
 [submodule "base_files"]
-	path = base_files
+	path = base-files
 	url = https://github.com/rozjin/base_files
