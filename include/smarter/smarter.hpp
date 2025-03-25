@@ -260,9 +260,19 @@ struct shared_ptr : ptr_access_crtp<T, shared_ptr<T, H>> {
 		return *this;
 	}
 
+    bool operator==(const shared_ptr &other) const {
+        return this->get() == other.get();
+    }
+
 	explicit operator bool () const {
 		return _object;
 	}
+
+    unsigned int use_count() {
+        if (_ctr)   
+            return _ctr->check_count();
+        return 0;
+    }
 
 	void release() {
 		_object = nullptr;
@@ -395,6 +405,13 @@ struct weak_ptr {
 		
 		return shared_ptr<T, H>{adopt_rc, _object, _ctr};
 	}
+
+    bool expired() {
+        if (_ctr)
+            return _ctr->check_count() == 0;
+
+        return true;
+    }
 
 private:
 	T *_object;

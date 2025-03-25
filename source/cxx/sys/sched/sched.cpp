@@ -185,7 +185,6 @@ void sched::process::kill(int exit_code) {
         frg::destruct(memory::mm::heap, task);
     }
 
-    vfs::delete_table(this->fds);
     arch::cleanup_vmm_ctx(this);
 
     util::lock_guard guard{parent->lock};

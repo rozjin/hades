@@ -70,7 +70,7 @@ bool init_symbols(elf::file *file) {
     return true;
 }
 
-bool elf::file::init(vfs::fd *fd) {
+bool elf::file::init(shared_ptr<vfs::fd> fd) {
     this->fd = fd;
 
     elf64_hdr *hdr = (elf64_hdr *) kmalloc(64);

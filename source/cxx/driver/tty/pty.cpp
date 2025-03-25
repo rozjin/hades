@@ -1,5 +1,6 @@
 #include "driver/dtable.hpp"
 #include "util/lock.hpp"
+#include "util/types.hpp"
 #include <driver/tty/tty.hpp>
 #include <fs/dev.hpp>
 #include <fs/vfs.hpp>
@@ -13,7 +14,7 @@ void tty::ptmx::init() {
     vfs::devfs::append_device(device, dtable::majors::PTMX);
 }
 
-ssize_t tty::ptmx::on_open(vfs::fd *fd, ssize_t flags) {
+ssize_t tty::ptmx::on_open(shared_ptr<vfs::fd> fd, ssize_t flags) {
     util::lock_guard ptmx_guard{ptmx_lock};
 
     tty::pts *pts = frg::construct<tty::pts>(memory::mm::heap);

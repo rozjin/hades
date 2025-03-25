@@ -1,3 +1,4 @@
+#include "smarter/smarter.hpp"
 #include <fs/dev.hpp>
 #include <fs/vfs.hpp>
 #include <cstddef>
@@ -41,10 +42,11 @@ size_t part::probe(vfs::devfs::blockdev *dev) {
             private_data->dev = dev;
             private_data->part = dev->part_list.size() - 1;
 
-            auto part_node = frg::construct<vfs::node>(memory::mm::heap, dev->file->fs, dev->file->name + (dev->part_list.size() + 48), dev->file->parent, 0, vfs::node::type::BLOCKDEV);
+            auto parent = dev->file->parent.lock();
+            auto part_node = smarter::allocate_shared<vfs::node>(memory::mm::heap, dev->file->fs, dev->file->name + (dev->part_list.size() + 48), parent, 0, vfs::node::type::BLOCKDEV);
             part_node->private_data = private_data;
 
-            dev->file->parent->children.push_back(part_node);
+            parent->children.push_back(part_node);
         }
 
         kfree(mbr_header);
@@ -72,10 +74,11 @@ size_t part::probe(vfs::devfs::blockdev *dev) {
             private_data->dev = dev;
             private_data->part = dev->part_list.size() - 1;
 
-            auto part_node = frg::construct<vfs::node>(memory::mm::heap, dev->file->fs, dev->file->name + (dev->part_list.size() + 48), dev->file->parent, 0, vfs::node::type::BLOCKDEV);
+            auto parent = dev->file->parent.lock();
+            auto part_node = smarter::allocate_shared<vfs::node>(memory::mm::heap, dev->file->fs, dev->file->name + (dev->part_list.size() + 48), parent, 0, vfs::node::type::BLOCKDEV);
             part_node->private_data = private_data;
             
-            dev->file->parent->children.push_back(part_node);
+            parent->children.push_back(part_node);
         }
     }
 

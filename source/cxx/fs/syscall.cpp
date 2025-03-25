@@ -1,23 +1,3 @@
-/*
-    vfs::fd *open(frg::string_view filepath, fd_table *table, int64_t flags, int64_t mode);
-    fd_pair open_pipe(fd_table *table, ssize_t flags);
-    ssize_t lseek(vfs::fd *fd, size_t off, size_t whence);
-    vfs::fd *dup(vfs::fd *fd, ssize_t flags, ssize_t new_num);
-    ssize_t close(vfs::fd *fd);
-    ssize_t read(vfs::fd *fd, void *buf, ssize_t len);
-    ssize_t write(vfs::fd *fd, void *buf, ssize_t len);
-    ssize_t ioctl(vfs::fd *fd, size_t req, void *buf);
-    void *mmap(vfs::fd *fd, void *addr, ssize_t off, ssize_t len);
-    ssize_t lstat(frg::string_view filepath, node::statinfo *buf);
-    ssize_t create(frg::string_view filepath, fd_table *table, int64_t type, int64_t flags, int64_t mode);
-    ssize_t mkdir(frg::string_view dirpath, int64_t flags, int64_t mode);
-    ssize_t rename(frg::string_view oldpath, frg::string_view newpath, int64_t flags);
-    ssize_t link(frg::string_view from, frg::string_view to, bool is_symlink);
-    ssize_t unlink(frg::string_view filepath);
-    ssize_t rmdir(frg::string_view dirpath);
-    pathlist lsdir(frg::string_view dirpath);
- */
-
 #include "sys/sched/time.hpp"
 #include "util/lock.hpp"
 #include <util/types.hpp>
@@ -29,7 +9,7 @@
 #include <arch/types.hpp>
 #include <arch/x86/types.hpp>
 
-vfs::node *resolve_dirfd(int dirfd, frg::string_view path, sched::process *process) {
+shared_ptr<vfs::node> resolve_dirfd(int dirfd, frg::string_view path, sched::process *process) {
     bool is_relative = path != '/';
     if (is_relative) {
         if (dirfd == AT_FDCWD) {
@@ -37,7 +17,7 @@ vfs::node *resolve_dirfd(int dirfd, frg::string_view path, sched::process *proce
         }
 
         auto fd = process->fds->fd_list[dirfd];
-        if (fd == nullptr || !fd->desc->node) {
+        if (!fd || !fd->desc->node) {
             arch::set_errno(EBADF);
 
             return nullptr;
@@ -49,18 +29,20 @@ vfs::node *resolve_dirfd(int dirfd, frg::string_view path, sched::process *proce
     return vfs::tree_root;
 }
 
-static bool has_recursive_access(vfs::node *target, uid_t effective_uid,
+static bool has_recursive_access(shared_ptr<vfs::node> target, uid_t effective_uid,
     gid_t effective_gid, uid_t real_uid, gid_t real_gid, mode_t mode, bool use_effective_id) {
-
-    auto current = target->parent;
-    while (current) {
-        if (!current->has_access(effective_uid, effective_gid, X_OK)) {
-            return false;
+    
+    if (!target->parent.expired()) {
+        auto current = target->parent.lock();
+        while (current) {
+            if (!current->has_access(effective_uid, effective_gid, X_OK)) {
+                return false;
+            }
+    
+            current = current->parent.lock();
         }
-
-        current = current->parent;
     }
-
+    
     if (!target->has_access(use_effective_id ? effective_uid : real_uid, use_effective_id ? effective_gid : real_gid, mode)) {
         return false;
     }
@@ -68,7 +50,7 @@ static bool has_recursive_access(vfs::node *target, uid_t effective_uid,
     return true;
 }
 
-void make_dirent(vfs::node *dir, vfs::node *child, dirent *entry) {
+void make_dirent(shared_ptr<vfs::node> dir, shared_ptr<vfs::node> child, dirent *entry) {
     strcpy(entry->d_name, child->name.data());
 
     entry->d_ino = child->inum;
@@ -132,15 +114,21 @@ void syscall_openat(arch::irq_regs *r) {
         return;
     }
 
-    if (base == nullptr) {
+    if (!base) {
         r->rax = -1;
         return;
     }
 
     auto node = vfs::resolve_at(path, base);
-    if (flags & O_CREAT && node == nullptr) {
-        auto dir = vfs::get_parent(base, path);
+    if (flags & O_CREAT && !node) {
+        auto res = vfs::get_parent(base, path);
+        if (res.expired()) {
+            arch::set_errno(EBADF);
+            r->rax = -1;
+            return;
+        }
 
+        auto dir = res.lock();
         if (!dir->has_access(process->effective_uid, process->effective_gid, W_OK | R_OK)) {
             arch::set_errno(EACCES);
             r->rax = -1;
@@ -157,9 +145,9 @@ void syscall_openat(arch::irq_regs *r) {
             new_gid = process->effective_gid;
         }
 
-        auto res = vfs::create(dir, path, process->fds, vfs::node::type::FILE, flags, new_mode, new_uid, new_gid);
-        if (res < 0) {
-            arch::set_errno(-res);
+        auto err = vfs::create(dir, path, process->fds, vfs::node::type::FILE, flags, new_mode, new_uid, new_gid);
+        if (err < 0) {
+            arch::set_errno(-err);
             r->rax = -1;
             return;
         }
@@ -169,7 +157,7 @@ void syscall_openat(arch::irq_regs *r) {
         arch::set_errno(EEXIST);
         r->rax = -1;
         return;
-    } else if (node == nullptr) {
+    } else if (!node) {
         arch::set_errno(ENOENT);
         r->rax = -1;
         return;
@@ -188,7 +176,14 @@ void syscall_openat(arch::irq_regs *r) {
     }
 
     if ((flags & O_TRUNC)) {
-        auto res = node->fs->truncate(node, 0);
+        if (node->fs.expired()) {
+            arch::set_errno(EBADF);
+            r->rax = -1;
+            return;
+        }
+
+        auto fs = node->fs.lock();
+        auto res = fs->truncate(node, 0);
         if (res < 0) {
             arch::set_errno(-res);
             r->rax = -1;
@@ -197,7 +192,7 @@ void syscall_openat(arch::irq_regs *r) {
     }
 
     auto fd = vfs::open(base, path, process->fds, flags, mode, process->effective_uid, process->effective_gid);
-    if (fd == nullptr) {
+    if (!fd) {
         arch::set_errno(ENOENT);
         r->rax = -1;
         return;
@@ -214,7 +209,7 @@ void syscall_accessat(arch::irq_regs *r) {
 
     auto process = arch::get_process();
     auto base = resolve_dirfd(dirfd, path, process);
-    if (base == nullptr) {
+    if (!base) {
         r->rax = -1;
         return;
     }
@@ -232,11 +227,11 @@ void syscall_accessat(arch::irq_regs *r) {
         return;
     }
 
-    vfs::node *node;
+    shared_ptr<vfs::node> node;
     if (flags & AT_EMPTY_PATH) {
         if (strcmp(path, "/") == 0) {
             node = vfs::tree_root;
-        } else if (base == nullptr) {
+        } else if (!base) {
             if (mode & F_OK) {
                 arch::set_errno(ENOENT);
             } else {
@@ -250,7 +245,7 @@ void syscall_accessat(arch::irq_regs *r) {
         }
     } else {
         node = vfs::resolve_at(path, base);
-        if (node == nullptr) {
+        if (!node) {
             if (mode & F_OK) {
                 arch::set_errno(ENOENT);
             } else {
@@ -294,7 +289,7 @@ void syscall_lseek(arch::irq_regs *r) {
 
     util::lock_guard fd_guard{process->fds->lock};
     auto fd = process->fds->fd_list[r->rdi];
-    if (fd == nullptr || (fd->desc->node && fd->desc->node->type == vfs::node::type::DIRECTORY)) {
+    if (!fd || (fd->desc->node && fd->desc->node->type == vfs::node::type::DIRECTORY)) {
         arch::set_errno(ESPIPE);
         r->rax = -1;
         return;
@@ -311,7 +306,7 @@ void syscall_dup2(arch::irq_regs *r) {
     auto process = arch::get_process();
 
     auto oldfd = process->fds->fd_list[oldfd_num];
-    if (oldfd == nullptr) {
+    if (!oldfd) {
         arch::set_errno(EBADF);
         r->rax = -1;
         return;
@@ -329,7 +324,7 @@ void syscall_close(arch::irq_regs *r) {
 
     util::lock_guard fd_guard{process->fds->lock};
     auto fd = process->fds->fd_list[fd_number];
-    if (fd == nullptr) {
+    if (!fd) {
         arch::set_errno(EBADF);
         r->rax = -1;
         return;
@@ -348,7 +343,7 @@ void syscall_read(arch::irq_regs *r) {
 
     util::lock_guard fd_guard{process->fds->lock};
     auto fd = process->fds->fd_list[fd_number];
-    if (fd == nullptr || (fd->desc->node && fd->desc->node->type == vfs::node::type::DIRECTORY)) {
+    if (!fd || (fd->desc->node && fd->desc->node->type == vfs::node::type::DIRECTORY)) {
         arch::set_errno(ESPIPE);
         r->rax = -1;
         return;
@@ -382,7 +377,7 @@ void syscall_write(arch::irq_regs *r) {
 
     util::lock_guard fd_guard{process->fds->lock};
     auto fd = process->fds->fd_list[fd_number];
-    if (fd == nullptr || (fd->desc->node && fd->desc->node->type == vfs::node::type::DIRECTORY)) {
+    if (!fd || (fd->desc->node && fd->desc->node->type == vfs::node::type::DIRECTORY)) {
         arch::set_errno(ESPIPE);
         r->rax = -1;
         return;
@@ -416,7 +411,7 @@ void syscall_ioctl(arch::irq_regs *r) {
 
     util::lock_guard fd_guard{process->fds->lock};
     auto fd = process->fds->fd_list[fd_number];
-    if (fd == nullptr || (fd->desc->node && fd->desc->node->type == vfs::node::type::DIRECTORY)) {
+    if (!fd || (fd->desc->node && fd->desc->node->type == vfs::node::type::DIRECTORY)) {
         arch::set_errno(ESPIPE);
         r->rax = -1;
         return;
@@ -455,11 +450,11 @@ void syscall_statat(arch::irq_regs *r) {
         return;
     }
 
-    vfs::node *node;
+    shared_ptr<vfs::node> node;
     if (flags & AT_EMPTY_PATH) {
         if (strcmp(path, "/") == 0) {
             node = vfs::tree_root;
-        } else if (base == nullptr) {
+        } else if (!base) {
             arch::set_errno(EBADF);
             r->rax = -1;
             return;
@@ -468,14 +463,20 @@ void syscall_statat(arch::irq_regs *r) {
         }
     } else {
         node = vfs::resolve_at(path, base);
-        if (node == nullptr) {
+        if (!node) {
             arch::set_errno(EBADF);
             r->rax = -1;
             return;;
         }
     }
 
-    auto dir = node->parent;
+    if (node->parent.expired()) {
+        arch::set_errno(EBADF);
+        r->rax = -1;
+        return;    
+    }
+
+    auto dir = node->parent.lock();
     if (!dir) {
         if (!node->has_access(process->effective_uid, process->effective_gid, X_OK)) {
             arch::set_errno(EACCES);
@@ -492,7 +493,7 @@ void syscall_statat(arch::irq_regs *r) {
     }
 
 
-    arch::copy_to_user(buf, node->meta, sizeof(vfs::node::statinfo));
+    arch::copy_to_user(buf, node->meta.get(), sizeof(vfs::node::statinfo));
     r->rax = 0;
 }
 
@@ -503,13 +504,20 @@ void syscall_mkdirat(arch::irq_regs *r) {
 
     auto process = arch::get_process();
     auto base = resolve_dirfd(dirfd, path, process);
-    if (base == nullptr) {
+    if (!base) {
         r->rax = -1;
         return;
     }
 
-    auto dir = vfs::get_parent(base, path);
-    if (dir == nullptr || dir->type != vfs::node::type::DIRECTORY) {
+    auto res = vfs::get_parent(base, path);
+    if (res.expired()) {
+        arch::set_errno(EBADF);
+        r->rax = -1;
+        return;
+    }
+
+    auto dir = res.lock();
+    if (!dir || dir->type != vfs::node::type::DIRECTORY) {
         arch::set_errno(ENOENT);
         r->rax = -1;
         return;
@@ -533,10 +541,9 @@ void syscall_mkdirat(arch::irq_regs *r) {
     }
 
     util::lock_guard guard{dir->lock};
-    auto res = vfs::mkdir(dir, path, 0, new_mode, new_uid, new_gid);
-
-    if (res < 0) {
-        arch::set_errno(-res);
+    auto err = vfs::mkdir(dir, path, 0, new_mode, new_uid, new_gid);
+    if (err < 0) {
+        arch::set_errno(-err);
         r->rax = -1;
         return;
     }
@@ -554,15 +561,23 @@ void syscall_renameat(arch::irq_regs *r) {
 
     auto old_base = resolve_dirfd(old_dirfd_num, old_path, process);
     auto new_base = resolve_dirfd(new_dirfd_num, new_path, process);
-    if (old_base == nullptr || new_base == nullptr) {
+    if (!old_base || !new_base) {
         r->rax = -1;
         return;
     }
 
-    auto old_dir = vfs::get_parent(old_base, old_path);
-    auto new_dir = vfs::get_parent(new_base, new_path);
+    auto old_res = vfs::get_parent(old_base, old_path);
+    auto new_res = vfs::get_parent(new_base, new_path);
+    if (old_res.expired() || new_res.expired()) {
+        arch::set_errno(EBADF);
+        r->rax = -1;
+        return;
+    }
 
-    if (old_dir == nullptr || new_dir == nullptr
+    auto old_dir = old_res.lock();
+    auto new_dir = new_res.lock();
+
+    if (!old_dir || !new_dir
         || old_dir->type != vfs::node::type::DIRECTORY || new_dir->type != vfs::node::type::DIRECTORY) {
         arch::set_errno(ENOENT);
         r->rax = -1;
@@ -632,7 +647,7 @@ void syscall_linkat(arch::irq_regs *r) {
     auto process = arch::get_process();
     auto old_base = resolve_dirfd(old_dirfd_num, old_path, process);
     auto new_base = resolve_dirfd(new_dirfd_num, new_path, process);
-    if (old_base == nullptr || new_base == nullptr) {
+    if (!old_base || !new_base) {
         r->rax = -1;
         return;
     }
@@ -643,11 +658,11 @@ void syscall_linkat(arch::irq_regs *r) {
         return;
     }
 
-    vfs::node *src;
+    shared_ptr<vfs::node> src;
     if (flags & AT_EMPTY_PATH) {
         if (strcmp(old_path, "/") == 0) {
             src = vfs::tree_root;
-        } else if (old_base == nullptr) {
+        } else if (!old_base) {
             arch::set_errno(ENOENT);
             r->rax = -1;
             return;
@@ -656,7 +671,7 @@ void syscall_linkat(arch::irq_regs *r) {
         }
     } else {
         src = vfs::resolve_at(old_path, old_base);
-        if (src == nullptr) {
+        if (!src) {
             arch::set_errno(ENOENT);
             r->rax = -1;
             return;;
@@ -677,8 +692,16 @@ void syscall_linkat(arch::irq_regs *r) {
         return;
     }
 
-    auto old_dir = src->parent;
-    auto new_dir = vfs::get_parent(new_base, new_path);
+    auto old_res = src->parent;
+    auto new_res = vfs::get_parent(new_base, new_path);
+    if (old_res.expired() || new_res.expired()) {
+        arch::set_errno(EBADF);
+        r->rax = -1;
+        return;
+    }
+
+    auto old_dir = old_res.lock();
+    auto new_dir = new_res.lock();
 
     if (!new_dir || new_dir->type != vfs::node::type::DIRECTORY) {
         arch::set_errno(ESPIPE);
@@ -725,13 +748,13 @@ void syscall_unlinkat(arch::irq_regs *r) {
 
     auto process = arch::get_process();
     auto base = resolve_dirfd(dirfd_num, path, process);
-    if (base == nullptr) {
+    if (!base) {
         r->rax = -1;
         return;
     }
 
     auto node = vfs::resolve_at(path, base);
-    if (node == nullptr) {
+    if (!node) {
         arch::set_errno(ENOENT);
         r->rax = -1;
         return;
@@ -744,15 +767,20 @@ void syscall_unlinkat(arch::irq_regs *r) {
         return;
     }
 
-    auto dir = node->parent;
+    auto res = node->parent;
+    if (res.expired()) {
+        arch::set_errno(EBADF);
+        r->rax = -1;
+        return;
+    }
 
+    auto dir = res.lock();
     util::lock_guard dir_guard{dir->lock};
     util::lock_guard guard{node->lock};
 
-    auto res = vfs::unlink(base, path);
-
-    if (res < 0) {
-        arch::set_errno(-res);
+    auto err = vfs::unlink(base, path);
+    if (err < 0) {
+        arch::set_errno(-err);
         r->rax = -1;
         return;
     }
@@ -768,7 +796,7 @@ void syscall_readdir(arch::irq_regs *r) {
 
     util::lock_guard fd_guard{process->fds->lock};
     auto fd = process->fds->fd_list[fd_number];
-    if (fd == nullptr || fd->desc->node == nullptr || fd->desc->node->type != vfs::node::type::DIRECTORY) {
+    if (!fd || !fd->desc->node || fd->desc->node->type != vfs::node::type::DIRECTORY) {
         arch::set_errno(EBADF);
         r->rax = 1;
         return;
@@ -792,7 +820,7 @@ void syscall_readdir(arch::irq_regs *r) {
     if (!fd->desc->dirent_list.size()) {
         for (size_t i = 0; i < node->children.size(); i++) {
             auto child = node->children[i];
-            if (child ==  nullptr) {
+            if (!child) {
                 r->rax = -1;
                 return;
             }
@@ -819,7 +847,7 @@ void syscall_fcntl(arch::irq_regs *r) {
     auto process = arch::get_process();
     auto fd = process->fds->fd_list[r->rdi];
 
-    if (fd == nullptr) {
+    if (!fd) {
         arch::set_errno(EBADF);
         r->rax = -1;
         return;

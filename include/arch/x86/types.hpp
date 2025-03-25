@@ -195,14 +195,6 @@ namespace x86 {
     void sigreturn_default(sched::process *proc, sched::thread *task);
     void sighandler_default(sched::process *proc, sched::thread *task, int sig);
 
-    namespace loader {
-        bool load_elf(const char *path, vfs::fd *fd, sched::process_env *env);
-        void place_params(char **envp, char **argv, sched::thread *task, sched::process_env *env);
-        uint64_t *place_args(uint64_t* location, sched::process_env *env);
-        uint64_t *place_auxv(uint64_t *location, sched::process_env *env);
-        void load_params(char **argv, char** envp, sched::process_env *env);
-    }
-
     constexpr size_t IRQ0 = 32;
 
     constexpr size_t entries_per_table = 512;

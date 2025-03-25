@@ -1,5 +1,6 @@
 #include "fs/vfs.hpp"
 #include "mm/mm.hpp"
+#include "smarter/smarter.hpp"
 #include "util/log/log.hpp"
 #include <algorithm>
 #include <cstddef>
@@ -9,21 +10,27 @@
 
 static log::subsystem logger = log::make_subsystem("EXT2");
 
-void vfs::ext2fs::init_fs(node *root, node *source) {
-    filesystem::init_fs(root, source);
-
+bool vfs::ext2fs::load() {
     this->superblock = (ext2fs::super *) kmalloc(sizeof(ext2fs::super));
-    this->devfs = (vfs::devfs *) this->source->get_fs();
+    if (this->device.expired()) {
+        return false;
+    }
 
+    auto source = this->device.lock();
+    if (source->fs.expired()) {
+        return false;
+    }
+
+    auto devfs = source->fs.lock();
     if (devfs->read(source, superblock, sizeof(ext2fs::super), 1024) < 0) {
         kmsg(logger, "superblock: read error");
         kfree(superblock);
-        return;
+        return false;
     }
 
     if (superblock->signature != EXT2_SIGNATURE) {
         kfree(superblock);
-        return;
+        return false;
     }
 
     block_size = 1024 << superblock->block_size;
@@ -43,7 +50,7 @@ void vfs::ext2fs::init_fs(node *root, node *source) {
     if (read_inode_entry(&inode, 2) == -1) {
         kmsg(logger, "error reading root inode");
         kfree(superblock);
-        return;
+        return false;
     }
 
     root->inum = 2;
@@ -59,18 +66,20 @@ void vfs::ext2fs::init_fs(node *root, node *source) {
     root->meta->st_nlink = 1;
 
     read_dirents(&inode, (ext2fs::ext2_private **) (&root->private_data));
+
+    return true;;
 }
 
-vfs::node *vfs::ext2fs::lookup(node *parent, frg::string_view name) {
+weak_ptr<vfs::node> vfs::ext2fs::lookup(shared_ptr<node> parent, frg::string_view name) {
     ext2fs::inode dir_inode;
     if (read_inode_entry(&dir_inode, parent->inum) == -1) {
-        return nullptr;
+        return {};
     }
 
     auto private_data = (ext2fs::ext2_private *) parent->private_data;
     if (!private_data) {
         if (read_dirents(&dir_inode, &private_data) == -1) {
-            return nullptr;
+            return {};
         }
     }
 
@@ -79,7 +88,7 @@ vfs::node *vfs::ext2fs::lookup(node *parent, frg::string_view name) {
     while (file) {
         ext2fs::inode inode;
         if (read_inode_entry(&inode, file->dent->inode_index) == -1) {
-            return nullptr;
+            return {};
         }
 
         if (strncmp(file->name, name.data(), std::max((size_t) file->dent->name_length, name.size()))!= 0) {
@@ -129,8 +138,8 @@ vfs::node *vfs::ext2fs::lookup(node *parent, frg::string_view name) {
         }
 
         auto inode_index = file->dent->inode_index;
-        auto node = frg::construct<vfs::node>(memory::mm::heap, this, name, parent, 0, node_type, inode_index);
-        auto meta = frg::construct<vfs::node::statinfo>(memory::mm::heap);
+        auto node = smarter::allocate_shared<vfs::node>(memory::mm::heap, selfPtr, name, parent, 0, node_type, inode_index);
+        auto meta = smarter::allocate_shared<vfs::node::statinfo>(memory::mm::heap);
 
         node->meta = meta;
         node->private_data = nullptr;
@@ -155,10 +164,10 @@ vfs::node *vfs::ext2fs::lookup(node *parent, frg::string_view name) {
        return node;
     }
 
-    return nullptr;
+    return {};
 }
 
-ssize_t vfs::ext2fs::readdir(node *dir) {
+ssize_t vfs::ext2fs::readdir(shared_ptr<node> dir) {
     ext2fs::inode dir_inode;
     if (read_inode_entry(&dir_inode, dir->inum) == -1) {
         return -1;
@@ -223,8 +232,8 @@ ssize_t vfs::ext2fs::readdir(node *dir) {
         // filesystem *fs, path name, node *parent, ssize_t flags, ssize_t type, ssize_t inum = -1
 
         auto inode_index = file->dent->inode_index;
-        auto node = frg::construct<vfs::node>(memory::mm::heap, this, file->name, dir, 0, node_type, inode_index);
-        auto meta = frg::construct<vfs::node::statinfo>(memory::mm::heap);
+        auto node = smarter::allocate_shared<vfs::node>(memory::mm::heap, selfPtr, file->name, dir, 0, node_type, inode_index);
+        auto meta = smarter::allocate_shared<vfs::node::statinfo>(memory::mm::heap);
 
         node->meta = meta;
         node->private_data = (void *) file;
@@ -252,7 +261,7 @@ ssize_t vfs::ext2fs::readdir(node *dir) {
     return 0;
 }
 
-ssize_t vfs::ext2fs::read(node *file, void *buf, size_t len, off_t offset) {
+ssize_t vfs::ext2fs::read(shared_ptr<node> file, void *buf, size_t len, off_t offset) {
     ext2fs::inode inode;
     if (read_inode_entry(&inode, file->inum) == -1) {
         return -1;
@@ -267,7 +276,7 @@ ssize_t vfs::ext2fs::read(node *file, void *buf, size_t len, off_t offset) {
     return (bytes_copied < bytes_read) ? bytes_copied : bytes_read;
 }
 
-ssize_t vfs::ext2fs::write(node *file, void *buf, size_t len, off_t offset) {
+ssize_t vfs::ext2fs::write(shared_ptr<node> file, void *buf, size_t len, off_t offset) {
     ext2fs::inode inode;
     if (read_inode_entry(&inode, file->inum) == -1) {
         return -1;
@@ -280,7 +289,7 @@ ssize_t vfs::ext2fs::write(node *file, void *buf, size_t len, off_t offset) {
     return bytes_written;
 }
 
-ssize_t vfs::ext2fs::truncate(node *file, off_t offset) {
+ssize_t vfs::ext2fs::truncate(shared_ptr<node> file, off_t offset) {
     if (file->meta->st_size == offset) {
         return 0;
     }
@@ -317,7 +326,7 @@ ssize_t vfs::ext2fs::truncate(node *file, off_t offset) {
     return 0;
 }
 
-ssize_t vfs::ext2fs::create(node *dst, path name, int64_t type, int64_t flags, mode_t mode,
+ssize_t vfs::ext2fs::create(shared_ptr<node> dst, path name, int64_t type, int64_t flags, mode_t mode,
     uid_t uid, gid_t gid) {
     ext2fs::inode parent_inode;
     if (read_inode_entry(&parent_inode, dst->inum) == -1) {
@@ -371,8 +380,8 @@ ssize_t vfs::ext2fs::create(node *dst, path name, int64_t type, int64_t flags, m
         return -1;
     }
 
-    auto node = frg::construct<vfs::node>(memory::mm::heap, this, name, dst, flags, type, inum);
-    auto meta = frg::construct<vfs::node::statinfo>(memory::mm::heap);
+    auto node = smarter::allocate_shared<vfs::node>(memory::mm::heap, selfPtr, name, dst, flags, type, inum);
+    auto meta = smarter::allocate_shared<vfs::node::statinfo>(memory::mm::heap);
 
     meta->st_ino = inum;
     meta->st_uid = parent_inode.uid;
@@ -389,7 +398,7 @@ ssize_t vfs::ext2fs::create(node *dst, path name, int64_t type, int64_t flags, m
     return 0;
 }
 
-ssize_t vfs::ext2fs::mkdir(node *dst, frg::string_view name, int64_t flags, mode_t mode,
+ssize_t vfs::ext2fs::mkdir(shared_ptr<node> dst, frg::string_view name, int64_t flags, mode_t mode,
     uid_t uid, gid_t gid) {
     ext2fs::inode parent_inode;
     if (read_inode_entry(&parent_inode, dst->inum) == -1) {
@@ -414,8 +423,8 @@ ssize_t vfs::ext2fs::mkdir(node *dst, frg::string_view name, int64_t flags, mode
         return -1;
     }
 
-    auto node = frg::construct<vfs::node>(memory::mm::heap, this, name, dst, flags, node::type::DIRECTORY, inum);
-    auto meta = frg::construct<vfs::node::statinfo>(memory::mm::heap);
+    auto node = smarter::allocate_shared<vfs::node>(memory::mm::heap, selfPtr, name, dst, flags, node::type::DIRECTORY, inum);
+    auto meta = smarter::allocate_shared<vfs::node::statinfo>(memory::mm::heap);
 
     meta->st_ino = inum;
     meta->st_uid = parent_inode.uid;
@@ -432,7 +441,7 @@ ssize_t vfs::ext2fs::mkdir(node *dst, frg::string_view name, int64_t flags, mode
     return 0;
 }
 
-ssize_t vfs::ext2fs::unlink(node *dst) {
+ssize_t vfs::ext2fs::unlink(shared_ptr<node> dst) {
     auto private_data = (ext2fs::ext2_private *) dst->private_data;
     return free_inode(private_data->dent->inode_index);
 }
@@ -556,6 +565,18 @@ int vfs::ext2fs::write_inode(inode *inode, int index, void *buf, size_t count, o
             inode_size += length;
         }
 
+        if (device.expired()) {
+            kmsg(logger, "write error");
+            return -1;            
+        }
+
+        auto source = device.lock();
+        if (source->fs.expired()) {
+            kmsg(logger, "write error");
+            return -1;
+        }
+
+        auto devfs = source->fs.lock();
         if (devfs->write(source, (char *) buf + headway, length, block * block_size + block_offset) < 0) {
             kmsg(logger, "write error");
             return -1;
@@ -595,6 +616,19 @@ int vfs::ext2fs::read_inode(inode *inode, void *buf, size_t count, off_t off) {
             length = block_size - off;
         }
 
+
+        if (device.expired()) {
+            kmsg(logger, "write error");
+            return -1;            
+        }
+
+        auto source = device.lock();
+        if (source->fs.expired()) {
+            kmsg(logger, "write error");
+            return -1;
+        }
+
+        auto devfs = source->fs.lock();
         if (devfs->read(source, (char *) buf + headway, length, block * block_size + block_offset) < 0) {
             kmsg(logger, "read error");
             return -1;
@@ -607,6 +641,17 @@ int vfs::ext2fs::read_inode(inode *inode, void *buf, size_t count, off_t off) {
 }
 
 int vfs::ext2fs::inode_set_block(inode *inode, int index, uint32_t iblock, uint32_t block) {
+    if (device.expired()) {
+        return -1;            
+    }
+
+    auto source = device.lock();
+    if (source->fs.expired()) {
+        return -1;
+    }
+
+    auto devfs = source->fs.lock();
+    
     uint32_t blocks_per_level = block_size / 4;
     if (iblock < 12) {
         inode->blocks[iblock] = block;
@@ -735,6 +780,17 @@ int vfs::ext2fs::inode_set_block(inode *inode, int index, uint32_t iblock, uint3
 }
 
 int vfs::ext2fs::inode_get_block(inode *inode, uint32_t iblock, uint32_t *res) {
+    if (device.expired()) {
+        return -1;            
+    }
+
+    auto source = device.lock();
+    if (source->fs.expired()) {
+        return -1;
+    }
+
+    auto devfs = source->fs.lock();
+
     uint32_t blocks_per_level = block_size / 4;
     uint32_t block = 0;
 
@@ -811,6 +867,17 @@ int vfs::ext2fs::inode_get_block(inode *inode, uint32_t iblock, uint32_t *res) {
 }
 
 int vfs::ext2fs::free_block(uint32_t block) {
+    if (device.expired()) {
+        return -1;            
+    }
+
+    auto source = device.lock();
+    if (source->fs.expired()) {
+        return -1;
+    }
+
+    auto devfs = source->fs.lock();
+
     uint32_t bgd_index = block / superblock->blocks_per_group;
     uint32_t bitmap_index = block - bgd_index * superblock->blocks_per_group;
 
@@ -851,6 +918,17 @@ int vfs::ext2fs::free_block(uint32_t block) {
 }
 
 int vfs::ext2fs::free_inode(uint32_t inode) {
+    if (device.expired()) {
+        return -1;            
+    }
+
+    auto source = device.lock();
+    if (source->fs.expired()) {
+        return -1;
+    }
+
+    auto devfs = source->fs.lock();
+
     uint32_t bgd_index = inode / superblock->inodes_per_group;
     uint32_t bitmap_index = inode - bgd_index * superblock->inodes_per_group;
 
@@ -929,6 +1007,17 @@ int vfs::ext2fs::allocate_inode() {
 }
 
 int vfs::ext2fs::bgd_allocate_inode(bgd *bgd, int bgd_index) {
+    if (device.expired()) {
+        return -1;            
+    }
+
+    auto source = device.lock();
+    if (source->fs.expired()) {
+        return -1;
+    }
+
+    auto devfs = source->fs.lock();
+
     if (bgd->unallocated_inodes == 0) {
         return -1;
     }
@@ -972,6 +1061,17 @@ int vfs::ext2fs::bgd_allocate_inode(bgd *bgd, int bgd_index) {
 }
 
 int vfs::ext2fs::bgd_allocate_block(bgd *bgd, int bgd_index) {
+    if (device.expired()) {
+        return -1;            
+    }
+
+    auto source = device.lock();
+    if (source->fs.expired()) {
+        return -1;
+    }
+
+    auto devfs = source->fs.lock();
+
     if (bgd->unallocated_blocks == 0) {
         return -1;
     }
@@ -1015,6 +1115,17 @@ int vfs::ext2fs::bgd_allocate_block(bgd *bgd, int bgd_index) {
 }
 
 int vfs::ext2fs::read_inode_entry(inode *inode, int index) {
+    if (device.expired()) {
+        return -1;            
+    }
+
+    auto source = device.lock();
+    if (source->fs.expired()) {
+        return -1;
+    }
+
+    auto devfs = source->fs.lock();
+
     int table_index = (index - 1) % superblock->inodes_per_group;
     int bgd_index = (index - 1) / superblock->inodes_per_group;
 
@@ -1033,6 +1144,17 @@ int vfs::ext2fs::read_inode_entry(inode *inode, int index) {
 }
 
 int vfs::ext2fs::write_inode_entry(inode *inode, int index) {
+    if (device.expired()) {
+        return -1;            
+    }
+
+    auto source = device.lock();
+    if (source->fs.expired()) {
+        return -1;
+    }
+
+    auto devfs = source->fs.lock();
+
     int table_index = (index - 1) % superblock->inodes_per_group;
     int bgd_index = (index - 1) / superblock->inodes_per_group;
 
@@ -1051,8 +1173,18 @@ int vfs::ext2fs::write_inode_entry(inode *inode, int index) {
 }
 
 int vfs::ext2fs::read_bgd(bgd *bgd, int index) {
-    uint64_t bgd_offset = (block_size >= 2048) ? block_size : block_size * 2;
+    if (device.expired()) {
+        return -1;            
+    }
 
+    auto source = device.lock();
+    if (source->fs.expired()) {
+        return -1;
+    }
+
+    auto devfs = source->fs.lock();
+
+    uint64_t bgd_offset = (block_size >= 2048) ? block_size : block_size * 2;
     if (devfs->read(source, bgd, sizeof(ext2fs::bgd), bgd_offset + index * sizeof(ext2fs::bgd)) == -1) {
         return -1;
     }
@@ -1061,8 +1193,18 @@ int vfs::ext2fs::read_bgd(bgd *bgd, int index) {
 }
 
 int vfs::ext2fs::write_bgd(bgd *bgd, int index) {
-    uint64_t bgd_offset = (block_size >= 2048) ? block_size : block_size * 2;
+    if (device.expired()) {
+        return -1;            
+    }
 
+    auto source = device.lock();
+    if (source->fs.expired()) {
+        return -1;
+    }
+
+    auto devfs = source->fs.lock();
+
+    uint64_t bgd_offset = (block_size >= 2048) ? block_size : block_size * 2;
     if (devfs->write(source, bgd, sizeof(ext2fs::bgd), bgd_offset + index * sizeof(ext2fs::bgd)) == -1) {
         return -1;
     }

@@ -139,10 +139,10 @@ namespace vfs {
             };
 
             struct filedev: device {
-                vfs::node *file;
+                shared_ptr<node> file;
 
-                virtual ssize_t on_open(vfs::fd *fd, ssize_t flags) = 0;
-                virtual ssize_t on_close(vfs::fd *fd, ssize_t flags) = 0;
+                virtual ssize_t on_open(shared_ptr<fd> fd, ssize_t flags) = 0;
+                virtual ssize_t on_close(shared_ptr<fd> fd, ssize_t flags) = 0;
 
                 virtual ssize_t read(void *buf, size_t len, size_t offset) = 0;
                 virtual ssize_t write(void *buf, size_t len, size_t offset) = 0;
@@ -173,8 +173,8 @@ namespace vfs {
                     
                     cache::holder *disk_cache;
 
-                    virtual ssize_t on_open(vfs::fd *fd, ssize_t flags) override { return -ENOTSUP; }
-                    virtual ssize_t on_close(vfs::fd *fd, ssize_t flags) override { return -ENOTSUP; }
+                    virtual ssize_t on_open(shared_ptr<fd> fd, ssize_t flags) override { return -ENOTSUP; }
+                    virtual ssize_t on_close(shared_ptr<fd> fd, ssize_t flags) override { return -ENOTSUP; }
 
                     virtual ssize_t read(void *buf, size_t len, size_t offset) override { return 0; }
                     virtual ssize_t write(void *buf, size_t len, size_t offset) override { return 0; }
@@ -189,8 +189,8 @@ namespace vfs {
 
             struct chardev: filedev {
                 public:
-                    virtual ssize_t on_open(vfs::fd *fd, ssize_t flags) override { return 0; }
-                    virtual ssize_t on_close(vfs::fd *fd, ssize_t flags) override { return 0; }
+                    virtual ssize_t on_open(shared_ptr<fd> fd, ssize_t flags) override { return 0; }
+                    virtual ssize_t on_close(shared_ptr<fd> fd, ssize_t flags) override { return 0; }
 
                     virtual ssize_t read(void *buf, size_t len, size_t offset) override { return 0; }
                     virtual ssize_t write(void *buf, size_t len, size_t offset) override { return 0; }
@@ -238,19 +238,20 @@ namespace vfs {
             static void append_device(device *dev, ssize_t major);
             static void remove_device(device *dev, ssize_t major);
 
-            devfs() { };
+            devfs(shared_ptr<node> root):
+                vfs::filesystem(root, {}) { };
 
-            node *lookup(node *parent, frg::string_view name) override;
+            weak_ptr<node> lookup(shared_ptr<node> parent, frg::string_view name) override;
 
-            ssize_t on_open(vfs::fd *fd, ssize_t flags) override;
-            ssize_t on_close(vfs::fd *fd, ssize_t flags) override;
+            ssize_t on_open(shared_ptr<fd> fd, ssize_t flags) override;
+            ssize_t on_close(shared_ptr<fd> fd, ssize_t flags) override;
 
-            ssize_t read(node *file, void *buf, size_t len, off_t offset) override;
-            ssize_t write(node *file, void *buf, size_t len, off_t offset) override;
-            ssize_t ioctl(node *file, size_t req, void *buf) override;
-            void *mmap(node *file, void *addr, size_t len, off_t offset) override;
-            ssize_t poll(node *file, sched::thread *thread) override;
-            ssize_t mkdir(node *dst, frg::string_view name, int64_t flags, mode_t mode,
+            ssize_t read(shared_ptr<node> file, void *buf, size_t len, off_t offset) override;
+            ssize_t write(shared_ptr<node> file, void *buf, size_t len, off_t offset) override;
+            ssize_t ioctl(shared_ptr<node> file, size_t req, void *buf) override;
+            void *mmap(shared_ptr<node> file, void *addr, size_t len, off_t offset) override;
+            ssize_t poll(shared_ptr<node> file, sched::thread *thread) override;
+            ssize_t mkdir(shared_ptr<node> dst, frg::string_view name, int64_t flags, mode_t mode,
                 uid_t uid, gid_t gid) override;
     };
 };

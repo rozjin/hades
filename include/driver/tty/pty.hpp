@@ -58,7 +58,7 @@ namespace tty {
         };
 
         static void init();
-        ssize_t on_open(vfs::fd *fd, ssize_t flags) override;
+        ssize_t on_open(shared_ptr<vfs::fd> fd, ssize_t flags) override;
 
         ptmx(vfs::devfs::busdev *bus, ssize_t major, ssize_t minor, void *aux):
             chardev(bus, major, minor, aux) {}

@@ -5,6 +5,7 @@
 #include "fs/vfs.hpp"
 #include "util/lock.hpp"
 #include "util/ring.hpp"
+#include "util/types.hpp"
 #include <cstddef>
 #include <fs/dev.hpp>
 #include <sys/sched/sched.hpp>
@@ -101,8 +102,8 @@ namespace tty {
 
             void set_active();
 
-            ssize_t on_open(vfs::fd *fd, ssize_t flags) override;
-            ssize_t on_close(vfs::fd *fd, ssize_t flags) override;
+            ssize_t on_open(shared_ptr<vfs::fd> fd, ssize_t flags) override;
+            ssize_t on_close(shared_ptr<vfs::fd> fd, ssize_t flags) override;
             ssize_t read(void *buf, size_t count, size_t offset) override;
             ssize_t write(void *buf, size_t count, size_t offset) override;
             ssize_t ioctl(size_t req, void *buf) override;
@@ -116,13 +117,13 @@ namespace tty {
         };
 
         static void init();
-        ssize_t on_open(vfs::fd *fd, ssize_t flags) override;    
+        ssize_t on_open(shared_ptr<vfs::fd> fd, ssize_t flags) override;    
         
         self(vfs::devfs::busdev *bus, ssize_t major, ssize_t minor, void *aux):
             chardev(bus, major, minor, aux) {}
     };
 
-    void set_active(frg::string_view path, vfs::fd_table *table);
+    void set_active(frg::string_view path, shared_ptr<vfs::fd_table> table);
 };
 
 #endif

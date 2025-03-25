@@ -23,7 +23,7 @@ void tty::self::init() {
     vfs::devfs::append_device(self, dtable::majors::SELF_TTY);
 }
 
-ssize_t tty::self::on_open(vfs::fd *fd, ssize_t flags) {
+ssize_t tty::self::on_open(shared_ptr<vfs::fd> fd, ssize_t flags) {
     if (arch::get_process() && !arch::get_process()->sess->tty) {
         arch::set_errno(ENODEV);
         return -1;
@@ -49,7 +49,7 @@ void tty::device::set_active() {
     active_tty = this;
 }
 
-ssize_t tty::device::on_open(vfs::fd *fd, ssize_t flags) {
+ssize_t tty::device::on_open(shared_ptr<vfs::fd> fd, ssize_t flags) {
     if (__atomic_fetch_add(&ref, 1, __ATOMIC_RELAXED) == 0) {
         if (driver && driver->has_connect) {
             if (driver->connect(this) == -1) {
@@ -69,7 +69,7 @@ ssize_t tty::device::on_open(vfs::fd *fd, ssize_t flags) {
     return 0;
 }
 
-ssize_t tty::device::on_close(vfs::fd *fd, ssize_t flags) {
+ssize_t tty::device::on_close(shared_ptr<vfs::fd> fd, ssize_t flags) {
     if (__atomic_sub_fetch(&ref, 1, __ATOMIC_RELAXED) == 0) {
         if (driver && driver->has_disconnect) {
             driver->disconnect(this);
@@ -261,9 +261,9 @@ ssize_t tty::device::poll(sched::thread *thread) {
     return POLLIN | POLLOUT;
 }
 
-void tty::set_active(frg::string_view path, vfs::fd_table *table) {
+void tty::set_active(frg::string_view path, shared_ptr<vfs::fd_table> table) {
     auto fd = vfs::open(nullptr, path, table, O_NOCTTY, O_RDONLY, 0, 0);
-    if (fd == nullptr) return;
+    if (!fd) return;
 
     vfs::devfs::dev_priv *private_data = (vfs::devfs::dev_priv *) fd->desc->node->private_data; 
     tty::device *tty = (tty::device *) private_data->dev;

@@ -98,9 +98,6 @@ namespace vfs {
             };
 
             super *superblock;
-            inode *root;
-            vfs::devfs *devfs;
-
             uint64_t block_size;
             uint64_t frag_size;
             uint64_t bgd_count;
@@ -146,24 +143,25 @@ namespace vfs {
                 return 0;
             }
         public:
-            ext2fs() {}
+            ext2fs(shared_ptr<node> root, weak_ptr<node> device):
+                vfs::filesystem(root, device) {}
 
-            void init_fs(node *root, node *source) override;
+            bool load() override;
 
-            node *lookup(node *parent, frg::string_view name) override;
-            ssize_t readdir(node *dir) override;
+            weak_ptr<node> lookup(shared_ptr<node> parent, frg::string_view name) override;
+            ssize_t readdir(shared_ptr<node> dir) override;
 
-            ssize_t read(node *file, void *buf, size_t len, off_t offset) override;
-            ssize_t write(node *file, void *buf, size_t len, off_t offset) override;
-            ssize_t truncate(node *file, off_t offset) override;
+            ssize_t read(shared_ptr<node> file, void *buf, size_t len, off_t offset) override;
+            ssize_t write(shared_ptr<node> file, void *buf, size_t len, off_t offset) override;
+            ssize_t truncate(shared_ptr<node> file, off_t offset) override;
 
-            ssize_t create(node *dst, path name, int64_t type, int64_t flags, mode_t mode,
+            ssize_t create(shared_ptr<node> dst, path name, int64_t type, int64_t flags, mode_t mode,
                 uid_t uid, gid_t gid) override;
-            ssize_t mkdir(node *dst, frg::string_view name, int64_t flags, mode_t mode,
+            ssize_t mkdir(shared_ptr<node> dst, frg::string_view name, int64_t flags, mode_t mode,
                 uid_t uid, gid_t gid) override;
 
             //ssize_t remove(node *dst) override;
-            ssize_t unlink(node *dst) override;
+            ssize_t unlink(shared_ptr<node> dst) override;
     };
 }
 

@@ -64,7 +64,6 @@ main_sources = files(
     'source/cxx/mm/pmm.cpp',
     'source/cxx/mm/vmm.cpp',
 
-    'source/cxx/sys/sched/loader.cpp',
     'source/cxx/sys/sched/management.cpp',
     'source/cxx/sys/sched/sched.cpp',
     'source/cxx/sys/sched/signal.cpp',

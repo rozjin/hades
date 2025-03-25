@@ -190,14 +190,12 @@ namespace sched {
 
         process *proc;
 
-        bool load_elf(const char *path, vfs::fd *fd);
+        bool load_elf(const char *path, shared_ptr<vfs::fd> fd);
         void set_entry();
 
         void place_params(char **envp, char **argv, thread *target);
-
         uint64_t *place_args(uint64_t* location);
         uint64_t *place_auxv(uint64_t *location);
-
         void load_params(char **argv, char** envp);
     };
 
@@ -210,8 +208,8 @@ namespace sched {
             frg::vector<thread *, memory::mm::heap_allocator> threads;
             frg::vector<process *, memory::mm::heap_allocator> children;
             frg::vector<process *, memory::mm::heap_allocator> zombies;            
-            vfs::fd_table *fds;
-            vfs::node *cwd;
+            shared_ptr<vfs::fd_table> fds;
+            shared_ptr<vfs::node> cwd;
 
             util::spinlock lock;
 

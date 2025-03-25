@@ -2,6 +2,7 @@
 #define ELF_HPP
 
 
+#include "util/types.hpp"
 #include <fs/vfs.hpp>
 #include <frg/vector.hpp>
 #include <mm/mm.hpp>
@@ -118,7 +119,7 @@ namespace elf {
 
     struct file {
         uintptr_t load_offset;
-        vfs::fd *fd;
+        shared_ptr<vfs::fd> fd;
         vmm::vmm_ctx *ctx;
 
         elf64_hdr *header;
@@ -138,7 +139,7 @@ namespace elf {
 
         symbol *find_symbol(uintptr_t addr);
 
-        bool init(vfs::fd *fd);
+        bool init(shared_ptr<vfs::fd> fd);
         void load();
         bool load_interp(char **interp_path);
         void load_aux();

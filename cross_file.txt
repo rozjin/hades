@@ -1,5 +1,5 @@
 [constants]
-toolchain = '/opt/elf-gcc/bin'
+toolchain = '/opt/elf-gcc/prefix/bin'
 
 [binaries]
 c = toolchain / 'x86_64-elf-gcc'

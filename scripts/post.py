@@ -24,6 +24,7 @@ mount_dir = Path("/mnt", f"{args.name}").resolve()
 
 kernel_path = Path(args.kernel).resolve()
 image_path = Path(build_dir, f"{args.name}.img").resolve()
+persist_path = Path(build_dir, "persist.img").resolve()
 vmdk_path = Path(build_dir, f"{args.name}.vmdk").resolve()
 
 qcow2_path = Path(source_dir, "..", "hades.qcow2").resolve()

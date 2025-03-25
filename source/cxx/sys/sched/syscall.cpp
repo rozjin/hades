@@ -20,18 +20,20 @@ extern "C" {
     extern void x86_sigreturn_exit(arch::irq_regs *r);
 }
 
-static bool has_recursive_access(vfs::node *target, uid_t effective_uid,
+static bool has_recursive_access(shared_ptr<vfs::node> target, uid_t effective_uid,
     gid_t effective_gid, uid_t real_uid, gid_t real_gid, mode_t mode, bool use_effective_id) {
-
-    auto current = target;
-    while (current) {
-        if (!current->has_access(effective_uid, effective_gid, X_OK)) {
-            return false;
+    
+    if (!target->parent.expired()) {
+        auto current = target->parent.lock();
+        while (current) {
+            if (!current->has_access(effective_uid, effective_gid, X_OK)) {
+                return false;
+            }
+    
+            current = current->parent.lock();
         }
-
-        current = current->parent;
     }
-
+    
     if (!target->has_access(use_effective_id ? effective_uid : real_uid, use_effective_id ? effective_gid : real_gid, mode)) {
         return false;
     }
@@ -92,7 +94,6 @@ void syscall_exec(arch::irq_regs *r) {
         kfree(path);
         kfree(argv);
         kfree(envp);
-        vfs::close(fd);
 
         r->rax = -1;
         return;
@@ -553,23 +554,26 @@ void syscall_getcwd(arch::irq_regs *r) {
     auto node = process->cwd;
 
     util::lock_guard guard{node->lock};
-    auto path = vfs::get_absolute(node);
+    auto path = vfs::get_abspath(node);
 
-    if (path->size() <= size) {
-        arch::copy_to_user(buf, path->data(), strlen(path->data()));
+    if (path.size() <= size) {
+        arch::copy_to_user(buf, path.data(), path.size());
     } else {
-        frg::destruct(memory::mm::heap, path);
         arch::set_errno(ERANGE);
         r->rax = 0;
         return;
     }
 
-    frg::destruct(memory::mm::heap, path);
     r->rax = (uintptr_t) buf;
 }
 
 void syscall_chdir(arch::irq_regs *r) {
     const char *path = (char *) r->rdi;
+    if (path == nullptr) {
+        arch::set_errno(EFAULT);
+        r->rax = -1;
+        return;
+    }
 
     auto process = arch::get_process();
     auto node = vfs::resolve_at(path, process->cwd);

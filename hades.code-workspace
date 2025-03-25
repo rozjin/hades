@@ -124,7 +124,7 @@
             "iostream": "cpp",
             "cinttypes": "cpp"
         },
-        "C_Cpp.default.compileCommands": "/home/racemus/projects/hades/build/compile_commands.json",
+        "C_Cpp.default.compileCommands": "/home/racemus/Projects/hades/build/compile_commands.json",
         "C_Cpp.default.configurationProvider": "mesonbuild.mesonbuild"
     }
 }

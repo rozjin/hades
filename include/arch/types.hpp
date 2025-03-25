@@ -98,15 +98,6 @@ namespace arch {
     void set_errno(int errno);
     int get_errno();
 
-    namespace loader {
-        bool load_elf(const char *path, vfs::fd *fd, sched::process_env *env);
-        void set_entry(sched::process_env *env);
-        void place_params(char **envp, char **argv, sched::thread *task, sched::process_env *env);
-        uint64_t *place_args(uint64_t* location, sched::process_env *env);
-        uint64_t *place_auxv(uint64_t *location, sched::process_env *env);
-        void load_params(char **argv, char** envp, sched::process_env *env);
-    }
-
     void add_timer(sched::timer timer);
     void tick_clock(long nanos);
 };

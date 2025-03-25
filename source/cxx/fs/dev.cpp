@@ -4,6 +4,7 @@
 #include "fs/cache.hpp"
 #include "mm/common.hpp"
 #include "mm/mm.hpp"
+#include "smarter/smarter.hpp"
 #include "util/log/log.hpp"
 #include "util/log/panic.hpp"
 #include "util/misc.hpp"
@@ -99,7 +100,7 @@ void vfs::devfs::append_device(device *dev, ssize_t major) {
                 }    
             }
         
-            node *device_node = vfs::make_recursive(vfs::device_fs()->root, device_path, dev->cls == device_class::BLOCKDEV ? node::type::BLOCKDEV : node::type::CHARDEV, DEFAULT_MODE);
+            auto device_node = vfs::make_recursive(vfs::device_fs()->root, device_path, dev->cls == device_class::BLOCKDEV ? node::type::BLOCKDEV : node::type::CHARDEV, DEFAULT_MODE);
             if (!device_node) {
                 panic("[DEVFS]: Unable to make device: %s", device_path.data());
             }
@@ -147,20 +148,20 @@ void vfs::devfs::remove_device(device *dev, ssize_t major) {
     }
 }
 
-vfs::node *vfs::devfs::lookup(node *parent, frg::string_view name) {
+weak_ptr<vfs::node> vfs::devfs::lookup(shared_ptr<node> parent, frg::string_view name) {
     auto node = parent->find_child(name);
-    if (!node) return nullptr;
+    if (!node) return {};
 
     auto private_data = (dev_priv *) node->private_data;
-    if (!private_data) return nullptr;
+    if (!private_data) return {};
 
     devfs::device *device = private_data->dev;
-    if (!device) return nullptr;
+    if (!device) return {};
 
     return node;
 }
 
-ssize_t vfs::devfs::on_open(vfs::fd *fd, ssize_t flags) {
+ssize_t vfs::devfs::on_open(shared_ptr<fd> fd, ssize_t flags) {
     auto private_data = (dev_priv *) fd->desc->node->private_data;
     if (!private_data) return -ENOENT;
 
@@ -170,7 +171,7 @@ ssize_t vfs::devfs::on_open(vfs::fd *fd, ssize_t flags) {
     return device->on_open(fd, flags);
 }
 
-ssize_t vfs::devfs::on_close(vfs::fd *fd, ssize_t flags) {
+ssize_t vfs::devfs::on_close(shared_ptr<fd>fd, ssize_t flags) {
     auto private_data = (dev_priv *) fd->desc->node->private_data;
     if (!private_data) return -ENOENT;
 
@@ -180,7 +181,7 @@ ssize_t vfs::devfs::on_close(vfs::fd *fd, ssize_t flags) {
     return device->on_close(fd, flags);
 }
 
-ssize_t vfs::devfs::read(node *file, void *buf, size_t len, off_t offset) {
+ssize_t vfs::devfs::read(shared_ptr<node> file, void *buf, size_t len, off_t offset) {
     auto private_data = (dev_priv *) file->private_data;
     if (!private_data) return -ENOENT;
 
@@ -203,7 +204,7 @@ ssize_t vfs::devfs::read(node *file, void *buf, size_t len, off_t offset) {
     return device->read(buf, len, offset);
 }
 
-ssize_t vfs::devfs::write(node *file, void *buf, size_t len, off_t offset) {
+ssize_t vfs::devfs::write(shared_ptr<node> file, void *buf, size_t len, off_t offset) {
     auto private_data = (dev_priv *) file->private_data;
     if (!private_data) return -ENOENT;
 
@@ -226,7 +227,7 @@ ssize_t vfs::devfs::write(node *file, void *buf, size_t len, off_t offset) {
     return device->write(buf, len, offset);
 }
 
-ssize_t vfs::devfs::ioctl(node *file, size_t req, void *buf) {
+ssize_t vfs::devfs::ioctl(shared_ptr<node> file, size_t req, void *buf) {
     auto private_data = (dev_priv *) file->private_data;
     if (!private_data) return -ENOENT;
 
@@ -239,7 +240,7 @@ ssize_t vfs::devfs::ioctl(node *file, size_t req, void *buf) {
     }
 }
 
-void *vfs::devfs::mmap(node *file, void *addr, size_t len, off_t offset) {
+void *vfs::devfs::mmap(shared_ptr<node> file, void *addr, size_t len, off_t offset) {
     auto private_data = (dev_priv *) file->private_data;
     if (!private_data) return nullptr;
 
@@ -261,7 +262,7 @@ void *vfs::devfs::mmap(node *file, void *addr, size_t len, off_t offset) {
     //return device->mmap(file, addr, len, offset);
 }
 
-ssize_t vfs::devfs::poll(node *file, sched::thread *thread) {
+ssize_t vfs::devfs::poll(shared_ptr<node> file, sched::thread *thread) {
     auto private_data = (dev_priv *) file->private_data;
     if (!private_data) return -ENOENT;
 
@@ -271,15 +272,14 @@ ssize_t vfs::devfs::poll(node *file, sched::thread *thread) {
     return device->poll(thread);
 }
 
-ssize_t vfs::devfs::mkdir(node *dst, frg::string_view name, int64_t flags, mode_t mode,
+ssize_t vfs::devfs::mkdir(shared_ptr<node> dst, frg::string_view name, int64_t flags, mode_t mode,
     uid_t uid, gid_t gid) {
-    node *new_dir = frg::construct<vfs::node>(memory::mm::heap, this, name, dst, flags, node::type::DIRECTORY);
+    auto new_dir = smarter::allocate_shared<vfs::node>(memory::mm::heap, selfPtr, name, dst, flags, node::type::DIRECTORY);
 
     new_dir->meta->st_uid = uid;
     new_dir->meta->st_gid = gid;
     new_dir->meta->st_mode = S_IFDIR | mode;
 
     dst->children.push_back(new_dir);
-
     return 0;
 }

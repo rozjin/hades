@@ -1,3 +1,4 @@
+#include "smarter/smarter.hpp"
 #include "util/types.hpp"
 #include <cstddef>
 #include <frg/allocation.hpp>
@@ -7,15 +8,15 @@
 #include <mm/pmm.hpp>
 #include <util/string.hpp>
 
-vfs::node *vfs::rootfs::lookup(node *parent, frg::string_view name) {
+weak_ptr<vfs::node> vfs::rootfs::lookup(shared_ptr<node> parent, frg::string_view name) {
     if (parent->find_child(name)) {
         return parent->find_child(name);
     } else {
-        return nullptr;
+        return {};
     }
 }
 
-ssize_t vfs::rootfs::write(node *file, void *buf, size_t len, off_t offset) {
+ssize_t vfs::rootfs::write(shared_ptr<node> file, void *buf, size_t len, off_t offset) {
     auto storage = (rootfs::storage *) file->private_data;
     if (storage->length < len + offset) {
         void *old = storage->buf;
@@ -28,7 +29,7 @@ ssize_t vfs::rootfs::write(node *file, void *buf, size_t len, off_t offset) {
     return len;
 }
 
-ssize_t vfs::rootfs::read(node *file, void *buf, size_t len, off_t offset) {
+ssize_t vfs::rootfs::read(shared_ptr<node> file, void *buf, size_t len, off_t offset) {
     auto storage = (rootfs::storage *) file->private_data;
     if (storage->length > len + offset) {
         memcpy(buf, (char *) storage->buf + offset, len);
@@ -41,13 +42,13 @@ ssize_t vfs::rootfs::read(node *file, void *buf, size_t len, off_t offset) {
     }
 }
 
-ssize_t vfs::rootfs::create(node *dst, path name, int64_t type, int64_t flags, mode_t mode,
+ssize_t vfs::rootfs::create(shared_ptr<node> dst, path name, int64_t type, int64_t flags, mode_t mode,
     uid_t uid, gid_t gid) {
     auto storage = frg::construct<rootfs::storage>(memory::mm::heap);
     storage->buf = kmalloc(memory::page_size);
     storage->length = memory::page_size;
 
-    node *new_file = frg::construct<vfs::node>(memory::mm::heap, this, name, dst, flags, type);
+    auto new_file = smarter::allocate_shared<vfs::node>(memory::mm::heap, selfPtr, name, dst, flags, type);
 
     new_file->meta->st_uid = uid;
     new_file->meta->st_gid = gid;
@@ -59,9 +60,9 @@ ssize_t vfs::rootfs::create(node *dst, path name, int64_t type, int64_t flags, m
     return 0;
 }
 
-ssize_t vfs::rootfs::mkdir(node *dst, frg::string_view name, int64_t flags, mode_t mode,
+ssize_t vfs::rootfs::mkdir(shared_ptr<node> dst, frg::string_view name, int64_t flags, mode_t mode,
     uid_t uid, gid_t gid) {
-    node *new_dir = frg::construct<vfs::node>(memory::mm::heap, this, name, dst, flags, node::type::DIRECTORY);
+    auto new_dir = smarter::allocate_shared<vfs::node>(memory::mm::heap, selfPtr, name, dst, flags, node::type::DIRECTORY);
 
     new_dir->meta->st_uid = uid;
     new_dir->meta->st_gid = gid;
@@ -72,7 +73,7 @@ ssize_t vfs::rootfs::mkdir(node *dst, frg::string_view name, int64_t flags, mode
     return 0;
 }
 
-ssize_t vfs::rootfs::remove(node *dest) {
+ssize_t vfs::rootfs::remove(shared_ptr<node> dest) {
     auto storage = (rootfs::storage *) dest->private_data;
     kfree(storage->buf);
     frg::destruct(memory::mm::heap, storage);
